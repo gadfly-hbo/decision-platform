@@ -1,0 +1,48 @@
+/* Xanthil 暖灰青工作台 token（源：~/.zcode/design/DESIGN.md，勿在组件中硬编码色值） */
+:root {
+  --bg: #f7f6f3;
+  --surface: #ffffff;
+  --surface-2: #f0efec;
+  --border: #e2e0db;
+  --border-strong: #cfcdc6;
+  --text: #1f1e1b;
+  --text-2: #5b5952;
+  --text-3: #8a877e;
+  --accent: #0f766e;
+  --accent-strong: #0b5c55;
+  --accent-soft: #e6f4f2;
+  --accent-line: #bfe3de;
+  --ok: #166534;
+  --ok-soft: #e7f4ea;
+  --ok-line: #cbe6d2;
+  --warn: #92400e;
+  --warn-soft: #fdf1e2;
+  --warn-line: #f0dfc2;
+  --fail: #b91c1c;
+  --fail-soft: #fbeaea;
+  --fail-line: #f3caca;
+  --queue: #6d5bd0;
+  --queue-ink: #5b48c0;
+  --queue-soft: #efecfb;
+  --queue-line: #d9d2f5;
+
+  --font-sans: -apple-system, "SF Pro Text", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+
+  --fs-page-title: 22px;
+  --fs-view-title: 17px;
+  --fs-card-title: 13.5px;
+  --fs-body: 13px;
+  --fs-small: 11.5px;
+  --fs-meta: 10.5px;
+
+  --r-base: 10px;
+  --r-sm: 6px;
+  --r-pill: 999px;
+
+  --sp-xs: 4px;
+  --sp-sm: 6px;
+  --sp-md: 10px;
+  --sp-lg: 14px;
+  --sp-xl: 22px;
+}
