@@ -66,3 +66,17 @@
 1. `extractPeriod` 紧凑分支接受任意 8 位数字串——加月日范围校验。
 2. `server/dashboard.ts` catch-all 收窄为仅捕获 ReportParseError，让引擎缺陷显式上抛。
 3. BreakdownTable 金额列（贡献/当前值）复用 formatWanDelta/formatWanLevel，与图表万元口径一致。
+
+## M3 交付核对（2026-09-26，gated flow）
+
+- **端到端实测**（dev-all 真实服务）：①notify 未配置→`{configured:false}`、单期 historyCount=1、series 空；②行动 PUT（已执行+备注+维度+期次）→ /api/dashboard 的 actionReview 返回「核查西南加盟增长驱动 → 会员零售额同比 +37.8%，偏离 +442 万」（数字与本期 CSV 复算一致）；③临时加第二期 CSV→historyCount=2、series 6 条、期次升序；④删除行动文件与临时 CSV→全部恢复。
+- **打磨三项落地**：8 位串日期校验（99999999/20261301 拒绝）、dashboard catch 收窄为 ReportParseError（引擎异常上抛，测试钉住）、归因表金额列万元化（与贡献图口径一致）。
+- **M3 打磨项（后续）**：渠道级趋势折线、趋势检测规则（待 ≥4 期数据校准）、推送竞态加锁（当前接受理论竞态，注释明示）。
+
+### REVIEW cycle 2 语义修正
+
+「上周行动对照」窗口修正为**仅往期行动**（record.period ≠ 本期）——当周刚采纳的行动不再立即出现在对照块（cycle 2 之前 e2e 记录的"当周 PUT 即出现在 actionReview"行为已废弃）；thisWeek 的指标口径改为跟随行动所属结论的 metricIds[0]（交叉信号行动显示人数口径而非金额）。
+
+### REVIEW cycle 4 终审遗留（后续打磨候选）
+
+对照块最近期次窗口、HTTP 非法字段显式 400、notify-state 原子写、digest 显式排序、CSRF 边界、月长校验、回滚竞态——详见 .flow/review-findings.md cycle 4 节。

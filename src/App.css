@@ -406,3 +406,99 @@
   line-height: 1.6;
   vertical-align: middle;
 }
+
+/* M3：执行备注输入 */
+.exec-note {
+  margin-top: var(--sp-xs);
+  padding: var(--sp-xs) var(--sp-sm);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  font: inherit;
+  font-size: var(--fs-small);
+  color: var(--text-2);
+  max-width: 360px;
+}
+
+.exec-note:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.status-btn.st-executed[aria-pressed='true'] {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+  color: var(--accent-strong);
+}
+
+/* M3：上周行动对照 */
+.action-review {
+  margin-bottom: var(--sp-md);
+  padding: var(--sp-md);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  display: grid;
+  gap: var(--sp-sm);
+}
+
+.review-title {
+  margin: 0;
+  font-size: var(--fs-card-title);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.review-item {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-sm);
+  flex-wrap: wrap;
+}
+
+.review-chip {
+  flex-shrink: 0;
+}
+
+.review-chip.st-executed {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+  color: var(--accent-strong);
+}
+
+.review-text {
+  color: var(--text);
+}
+
+.review-thisweek {
+  color: var(--text-2);
+  font-size: var(--fs-small);
+}
+
+/* M3：推送状态 chip */
+.notify-chip {
+  display: inline-flex;
+  align-items: center;
+  margin-left: var(--sp-xs);
+  padding: 0 10px;
+  border-radius: var(--r-pill);
+  background: var(--ok-soft);
+  border: 1px solid var(--ok-line);
+  color: var(--ok);
+  font-size: var(--fs-meta);
+  line-height: 1.6;
+  vertical-align: middle;
+}
+
+.notify-chip.warn {
+  background: var(--warn-soft);
+  border-color: var(--warn-line);
+  color: var(--warn);
+}
+
+.action-error {
+  margin: var(--sp-md) 0 0;
+  color: var(--fail);
+  font-size: var(--fs-small);
+}

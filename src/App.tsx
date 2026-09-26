@@ -3,6 +3,7 @@ import './App.css'
 import { sortConclusions } from './data'
 import type { ActionStatus, DashboardData } from './data'
 import { useDashboardData } from './useDashboardData'
+import { useActionStore } from './useActionStore'
 import { ConclusionCard } from './components/ConclusionCard'
 import { ActionSummary } from './components/ActionSummary'
 
@@ -11,30 +12,20 @@ export interface AppProps {
   data?: DashboardData
 }
 
-const initialActionStatus = (data: DashboardData): Record<string, ActionStatus> =>
-  Object.fromEntries(
-    data.conclusions.flatMap((conclusion) =>
-      conclusion.actions.map((action) => [action.id, 'pending' as ActionStatus]),
-    ),
-  )
-
 export default function App({ data: injected }: AppProps = {}) {
   const data = useDashboardData(injected)
+  const { store: actionState, setAction, error: actionError } = useActionStore()
   const conclusions = sortConclusions(data.conclusions)
   const metricById = new Map(data.metrics.map((metric) => [metric.id, metric]))
   const seriesById = new Map(data.series.map((series) => [series.metricId, series]))
   const [expandedIds, setExpandedIds] = useState<Set<string>>(
     () => new Set(conclusions.length > 0 ? [conclusions[0].id] : []),
   )
-  const [actionStatus, setActionStatus] = useState<Record<string, ActionStatus>>(() =>
-    initialActionStatus(data),
-  )
 
-  // 数据源切换（演示回退 → 真实计算）时，展开态与行动状态按新数据重置
+  // 数据源切换（演示回退 → 真实计算）时，展开态按新数据重置
   const dataKey = data.period ?? data.window
   useEffect(() => {
     setExpandedIds(new Set(conclusions.length > 0 ? [conclusions[0].id] : []))
-    setActionStatus(initialActionStatus(data))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dataKey])
 
@@ -49,8 +40,22 @@ export default function App({ data: injected }: AppProps = {}) {
       return next
     })
 
-  const setActionStatusOf = (actionId: string, status: ActionStatus) =>
-    setActionStatus((prev) => ({ ...prev, [actionId]: status }))
+  // 行动变更：附带行动文本/结论维度/期次入库，供跨周对照展示
+  const handleAction = (actionId: string, patch: { status: ActionStatus; executedNote?: string }) => {
+    const conclusion = conclusions.find((c) => c.actions.some((a) => a.id === actionId))
+    const action = conclusion?.actions.find((a) => a.id === actionId)
+    // 演示回退（无期次）不落库：避免空 period 记录永久混入对照块（REVIEW cycle 3）
+    setAction(
+      actionId,
+      {
+        ...patch,
+        ...(action ? { text: action.text } : {}),
+        ...(conclusion?.dimension ? { dimension: conclusion.dimension } : {}),
+        ...(data.period ? { period: data.period } : {}),
+      },
+      Boolean(data.period),
+    )
+  }
 
   return (
     <main className="app">
@@ -59,7 +64,19 @@ export default function App({ data: injected }: AppProps = {}) {
         <p className="overview-lede">{data.lede}</p>
         <p className="overview-meta">
           数据窗口 {data.window} · 更新于 {data.updatedAt}
+          {data.historyCount !== undefined && ` · 已累积 ${data.historyCount} 期`}
+          {data.historyCount === 1 && '（累积 ≥2 期周报后展示趋势）'}
           {data.isDemo && <span className="chip demo-chip">演示数据</span>}
+          {data.notify &&
+            (data.notify.configured ? (
+              data.notify.lastPushedPeriod ? (
+                <span className="chip notify-chip">已推送 · {data.notify.lastPushedPeriod}</span>
+              ) : (
+                <span className="chip notify-chip warn">已配置 · 未推送</span>
+              )
+            ) : (
+              <span className="chip notify-chip warn">推送未配置</span>
+            ))}
         </p>
       </header>
       {conclusions.length === 0 ? (
@@ -80,18 +97,24 @@ export default function App({ data: injected }: AppProps = {}) {
                   onToggle={() => toggle(conclusion.id)}
                   metricFor={(id) => metricById.get(id)}
                   seriesFor={(id) => seriesById.get(id)}
-                  actionStatus={actionStatus}
-                  onActionStatusChange={setActionStatusOf}
+                  actionState={actionState}
+                  onActionAction={handleAction}
                 />
               </li>
             ))}
           </ol>
         </section>
       )}
+      {actionError && (
+        <p className="action-error" role="alert">
+          行动状态保存失败，已恢复为服务器状态
+        </p>
+      )}
       <ActionSummary
         conclusions={conclusions}
-        actionStatus={actionStatus}
-        onActionStatusChange={setActionStatusOf}
+        actionState={actionState}
+        onActionAction={handleAction}
+        actionReview={data.actionReview}
       />
     </main>
   )

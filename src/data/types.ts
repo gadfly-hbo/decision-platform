@@ -1,8 +1,8 @@
 /** 严重度：high = 今天要拍板 / medium = 本周关注 / low = 观察项 */
 export type Severity = 'high' | 'medium' | 'low'
 
-/** 行动状态：pending 待定 / accepted 采纳 / rejected 驳回 */
-export type ActionStatus = 'pending' | 'accepted' | 'rejected'
+/** 行动状态：pending 待定 / accepted 采纳 / rejected 驳回 / executed 已执行（M3） */
+export type ActionStatus = 'pending' | 'accepted' | 'rejected' | 'executed'
 
 /** 指标定义——定义一次、全局引用（指标层原则的最小落地） */
 export interface MetricDef {
@@ -15,7 +15,7 @@ export interface MetricDef {
 }
 
 export interface MetricPoint {
-  /** 数据层预生成的日期标签（MM-DD） */
+  /** 日期标签：演示数据为 MM-DD；真实周趋势为期次 YYYY-MM-DD（M3） */
   date: string
   value: number
 }
@@ -59,10 +59,22 @@ export interface SuggestedAction {
   impact: string
 }
 
+/** 跨周行动对照条目（M3：后端装配，前端只渲染） */
+export interface ActionReviewItem {
+  actionId: string
+  text: string
+  status: ActionStatus
+  executedNote?: string
+  period: string
+  thisWeek: string
+}
+
 /** 结论（决策卡）：一句话说清什么指标、偏离多少、大概什么原因 */
 export interface Conclusion {
   id: string
   severity: Severity
+  /** 渠道/交叉类结论的归因维度（运营模式·二级渠道），供跨周对照匹配 */
+  dimension?: string
   title: string
   summary: string
   /** 数据窗口，如 '09-12 ~ 09-25' */
@@ -86,4 +98,10 @@ export interface DashboardData {
   isDemo?: boolean
   /** 数据期次（真实数据来自周报文件名，如 2026-09-26） */
   period?: string
+  /** 跨周行动对照（M3） */
+  actionReview?: ActionReviewItem[]
+  /** 历史期数（M3：趋势数据基础；<2 期时 series 为空走降级） */
+  historyCount?: number
+  /** 推送状态（M3：后端装配） */
+  notify?: { configured: boolean; lastPushedPeriod?: string }
 }

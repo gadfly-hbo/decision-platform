@@ -1,4 +1,4 @@
-import { render, screen, within, fireEvent } from '@testing-library/react'
+import { render, screen, within, fireEvent, waitFor } from '@testing-library/react'
 import { vi } from 'vitest'
 import App from './App'
 import { demoData } from './data'
@@ -193,7 +193,7 @@ test('后端返回真实数据时切换展示（含真实结论与贡献图）',
   render(<App />)
   expect(await screen.findByText(/背离/)).toBeInTheDocument()
   expect(screen.queryByText('演示数据')).not.toBeInTheDocument()
-  expect(screen.getByTestId('contrib-会员零售额')).toBeInTheDocument()
+  expect(await screen.findByTestId('contrib-会员零售额')).toBeInTheDocument()
   expect(screen.getByText(/2026-09-26 周报/)).toBeInTheDocument()
   vi.unstubAllGlobals()
 })
@@ -210,5 +210,147 @@ test('后端 200 返回 isDemo:true 载荷时直接标注演示数据（第三�
   vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ ...demoData, isDemo: true }) })))
   render(<App />)
   expect(await screen.findByText('演示数据')).toBeInTheDocument()
+  vi.unstubAllGlobals()
+})
+
+/* ---- M3：行动后端化与对照 ---- */
+
+function stubFetchByRoute(routes: Record<string, unknown>) {
+  return vi.fn((input: RequestInfo | URL) => {
+    const url = String(input)
+    for (const [prefix, payload] of Object.entries(routes)) {
+      if (url.includes(prefix)) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(payload) })
+      }
+    }
+    return Promise.reject(new Error(`unexpected fetch: ${url}`))
+  })
+}
+
+test('行动状态走后端：初始自 /api/actions，变更 PUT 且成功持久', async () => {
+  const realData = {
+    ...demoData,
+    isDemo: false,
+    period: '2026-09-26',
+    historyCount: 1,
+    notify: { configured: false },
+    actionReview: [],
+  }
+  const calls: Array<{ url: string; method: string; body?: unknown }> = []
+  const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    calls.push({ url, method: init?.method ?? 'GET', body: init?.body ? JSON.parse(String(init.body)) : undefined })
+    if (url.includes('/api/actions') && init?.method === 'PUT') {
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) })
+    }
+    if (url.includes('/api/actions')) return Promise.resolve({ ok: true, json: () => Promise.resolve({}) })
+    return Promise.resolve({ ok: true, json: () => Promise.resolve(realData) })
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  render(<App />)
+  await screen.findByText(/背离|ROI 0\.72/)
+  const accept = await screen.findAllByRole('button', { name: '采纳' })
+  fireEvent.click(accept[0])
+  await waitFor(() => {
+    const put = calls.find((c) => c.method === 'PUT')
+    expect(put).toBeDefined()
+    expect(put!.url).toContain('/api/actions/')
+    expect(put!.body).toMatchObject({ status: 'accepted' })
+  })
+  vi.unstubAllGlobals()
+})
+
+test('对照块：actionReview 渲染行动与本周表现', async () => {
+  const realData = {
+    ...demoData,
+    isDemo: false,
+    period: '2026-09-26',
+    historyCount: 2,
+    notify: { configured: true, lastPushedPeriod: '2026-09-26' },
+    actionReview: [
+      { actionId: 'a-1', text: '核查西南加盟增长驱动', status: 'executed', executedNote: '预算已调', period: '2026-09-19', thisWeek: '会员零售额同比 +37.8%，偏离 +442 万' },
+    ],
+  }
+  vi.stubGlobal('fetch', stubFetchByRoute({ '/api/dashboard': realData, '/api/actions': {} }))
+  render(<App />)
+  expect(await screen.findByText(/核查西南加盟增长驱动/)).toBeInTheDocument()
+  expect(screen.getByText(/偏离 \+442 万/)).toBeInTheDocument()
+  expect(screen.getByText(/已推送 · 2026-09-26/)).toBeInTheDocument()
+  expect(screen.getByText(/已累积 2 期/)).toBeInTheDocument()
+  vi.unstubAllGlobals()
+})
+
+test('概览头：未配置推送与单期趋势提示', async () => {
+  const realData = { ...demoData, isDemo: false, period: '2026-09-26', historyCount: 1, notify: { configured: false }, actionReview: [] }
+  vi.stubGlobal('fetch', stubFetchByRoute({ '/api/dashboard': realData, '/api/actions': {} }))
+  render(<App />)
+  expect(await screen.findByText('推送未配置')).toBeInTheDocument()
+  expect(screen.getByText(/累积 ≥2 期周报后展示趋势/)).toBeInTheDocument()
+  vi.unstubAllGlobals()
+})
+
+test('行动可推进为已执行并录入备注（PUT 携带 executedNote）', async () => {
+  const realData = { ...demoData, isDemo: false, period: '2026-09-26', historyCount: 2, notify: { configured: false }, actionReview: [] }
+  const calls: Array<{ body?: unknown }> = []
+  vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    if (url.includes('/api/actions') && init?.method === 'PUT') {
+      calls.push({ body: JSON.parse(String(init.body)) })
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) })
+    }
+    return Promise.resolve({ ok: true, json: () => Promise.resolve(url.includes('/api/dashboard') ? realData : {}) })
+  }))
+  render(<App />)
+  const done = await screen.findAllByRole('button', { name: '已执行' })
+  fireEvent.click(done[0])
+  const note = await screen.findAllByPlaceholderText('执行说明（可选）')
+  fireEvent.change(note[0], { target: { value: '预算已上调' } })
+  fireEvent.blur(note[0])
+  await waitFor(() => {
+    expect(calls.some((c) => (c.body as { executedNote?: string }).executedNote === '预算已上调')).toBe(true)
+  })
+  vi.unstubAllGlobals()
+})
+
+test('PUT 失败回滚并显示行内错误', async () => {
+  const realData = { ...demoData, isDemo: false, period: '2026-09-26', historyCount: 2, notify: { configured: false }, actionReview: [] }
+  let failPut = false
+  vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    if (url.includes('/api/actions') && init?.method === 'PUT') {
+      if (!failPut) { failPut = true; return Promise.resolve({ ok: false, json: () => Promise.resolve({}) }) }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) })
+    }
+    return Promise.resolve({ ok: true, json: () => Promise.resolve(url.includes('/api/dashboard') ? realData : {}) })
+  }))
+  render(<App />)
+  const accept = await screen.findAllByRole('button', { name: '采纳' })
+  fireEvent.click(accept[0])
+  expect(await screen.findByText(/行动状态保存失败/)).toBeInTheDocument()
+  // 回滚：按钮回到待定
+  expect(accept[0]).toHaveAttribute('aria-pressed', 'false')
+  vi.unstubAllGlobals()
+})
+
+test('已配置但未推送成功：chip 显示「已配置 · 未推送」，不显示「已推送」', async () => {
+  const realData = { ...demoData, isDemo: false, period: '2026-09-26', historyCount: 2, notify: { configured: true }, actionReview: [] }
+  vi.stubGlobal('fetch', stubFetchByRoute({ '/api/dashboard': realData, '/api/actions': {} }))
+  render(<App />)
+  expect(await screen.findByText('已配置 · 未推送')).toBeInTheDocument()
+  expect(screen.queryByText(/^已推送/)).not.toBeInTheDocument()
+  vi.unstubAllGlobals()
+})
+
+test('演示回退（无期次）点击行动不落库（无 PUT）', async () => {
+  vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('backend down'))))
+  render(<App />)
+  const accept = await screen.findAllByRole('button', { name: '采纳' })
+  fireEvent.click(accept[0])
+  // 本地乐观更新仍生效（演示形态可用），但不产生 PUT
+  await waitFor(() => expect(accept[0]).toHaveAttribute('aria-pressed', 'true'))
+  const putCalls = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(
+    (c) => String(c[0]).includes('/api/actions/') && (c[1] as RequestInit | undefined)?.method === 'PUT',
+  )
+  expect(putCalls).toHaveLength(0)
   vi.unstubAllGlobals()
 })

@@ -16,14 +16,21 @@ const METRIC_COLUMNS: Array<{ key: MetricKey; prefix: string }> = [
 
 const DIMENSION_COLUMNS = ['渠道品牌', '运营模式', '一级渠道', '二级渠道'] as const
 
-/** 从文件名提取期次并归一化为 YYYY-MM-DD；兼容 2026-09-26 与 20260926 两种格式；无日期返回 ''（由上层按解析失败处理） */
+const validMonthDay = (mm: number, dd: number): boolean => mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31
+
+/** 从文件名提取期次并归一化为 YYYY-MM-DD；兼容 2026-09-26 与 20260926 两种格式；
+ *  做月日范围校验（99999999 这类数字串不作为日期）；无有效日期返回 ''（由上层按解析失败处理） */
 export function extractPeriod(sourceName: string): string {
   const dashed = sourceName.match(/(\d{4})-(\d{2})-(\d{2})/)
-  if (dashed) return dashed.slice(1).join('-')
+  if (dashed && validMonthDay(Number(dashed[2]), Number(dashed[3]))) {
+    return dashed.slice(1).join('-')
+  }
   const compact = sourceName.match(/\d{8}/)
   if (compact) {
     const raw = compact[0]
-    return `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}`
+    const mm = Number(raw.slice(4, 6))
+    const dd = Number(raw.slice(6, 8))
+    if (validMonthDay(mm, dd)) return `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}`
   }
   return ''
 }

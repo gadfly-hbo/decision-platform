@@ -206,7 +206,7 @@ test('下滑周：拉动只标正贡献、拖累只标负贡献，不产生自�
 test('R2/R5 的 metricIds[0] 与归因明细指标一致（证据区格式与数据同源）', () => {
   const r2 = conclusions.find((c) => c.id === 'c-structure')!
   expect(r2.metricIds[0]).toBe('newMemberBuyers')
-  const r5 = conclusions.find((c) => c.id === 'c-cross-1')!
+  const r5 = conclusions.find((c) => c.title.includes('新零售运营组'))!
   expect(r5.metricIds[0]).toBe('memberBuyers')
 })
 
@@ -224,4 +224,21 @@ test('R4 分级：大额偏离路径 medium，仅高增速路径 low', () => {
   // 真实样本的大额偏离渠道仍为 medium
   const real = buildConclusions(report)
   expect(real.find((c) => c.title.includes('西南加盟'))!.severity).toBe('medium')
+})
+
+/* ---- M3：渠道结论 id 跨期稳定 ---- */
+
+test('渠道结论 id 为维度 slug：跨期稳定、加盟/直营同名不冲突', () => {
+  const ids = conclusions.filter((c) => c.id.startsWith('c-ch-')).map((c) => c.id)
+  expect(ids.length).toBeGreaterThanOrEqual(4)
+  // 鲁苏加盟与鲁苏直营（若都命中）id 不同；同类渠道 id 稳定
+  expect(new Set(ids).size).toBe(ids.length)
+  const again = buildConclusions(report)
+  const againIds = again.filter((c) => c.id.startsWith('c-ch-')).map((c) => c.id)
+  expect(againIds).toEqual(ids)
+  // action id 由 conclusion id 派生，随渠道稳定
+  const ch = conclusions.find((c) => c.id.startsWith('c-ch-'))!
+  expect(ch.actions[0].id).toBe(`a-${ch.id}-1`)
+  // dimension 字段暴露（供跨周对照匹配）
+  expect(ch.dimension).toMatch(/^(加盟|直营)·/)
 })

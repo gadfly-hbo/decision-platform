@@ -30,3 +30,8 @@ export function formatWanDelta(v: number): string {
 export function formatWanLevel(v: number): string {
   return `${Math.round(Math.abs(v) / 10000).toLocaleString('zh-CN')} 万`
 }
+
+/** 带符号百分比（1 位小数）：+37.8% / -5.9% */
+export function formatPctDelta(v: number): string {
+  return `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`
+}

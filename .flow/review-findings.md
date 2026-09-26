@@ -1,102 +1,74 @@
-# REVIEW Findings — M2 会员周报异动检测与归因（cycle 1）
+# REVIEW Findings — M3（cycle 1）
 
-> 审查者：code-reviewer 子代理（新实例，冻结输入审查）。基线 f2e8f16cc676f302cc691a4a94c093bf54fe7a38，baseline_dirty=[.zcodeignore]（排除）。要点逐字保存（M1 期间的本文件内容见 git 历史 c65005d）。
+> 审查者：code-reviewer 子代理（新实例）。基线 d13c84fff902078c084ca8811ac5c7a18ecc1d4b，baseline_dirty=[.zcodeignore]。要点保存。
 
-**VERDICT: FAIL（REQUEST_CHANGES）** — 规格实现与真实样本数字自洽全部独立复算通过（含 verify 原样复现 63/63），但主动猎杀发现 2 个阻断性缺陷。
+**VERDICT: FAIL（REQUEST_CHANGES）** — 三大件与打磨项主体落地、数字自洽独立复算成立、verify 证据复现；但：
 
-## 阻断（BLOCKER）
-
-1. **[server/report/types.ts:33-35 + server/rules/engine.ts:219,225] 同期为 0 的渠道产出 `+Infinity%` 叙述（除零）**。实测合成行（新渠道 prev=0）经 R4 bigPath 触发，标题/derivation/breakdown delta 均出现 `+Infinity%`，违反数字自洽契约；周报新增加盟主体无同期基数是常规事件。复核标准：prev=0 行不再出现 Infinity/NaN，且仍可进大额偏离结论（叙述写「同期无基数」）。
-2. **[server/report/parseCsv.ts:35-41] 空数值单元格静默解析为 0**（`Number('')===0` 过校验），比丢数据更糟且直接链入 blocker 1；任务 1 验收明确「坏数字显式报错」。复核标准：空单元格抛 ReportParseError 含行号，63 测试仍绿。
-
-## 建议（SUGGESTION，本 flow 随修）
-
-- R3 标题把开卡异动标成「会员购买人数」（潜伏缺陷，无测试覆盖）→ 按指标名取标题 + 补合成夹具测试。
-- extractPeriod 注释称回退当前日期实际返回 ''，与 PRD story 9 矛盾 → 无日期文件名按解析失败处理（回退演示 + 显式告警），修正注释。
-- fmtWan 对存量值也加 +/- 号（「同期基数 +1,169 万」误导）→ 拆 delta/level 两个函数，与 ContributionChart 的重复实现一并提取共享。
-- R5 交叉信号无规模门槛（proposal 约束级结论 2）→ 补基数门槛，说明记录在 RULES。
-- themedMetrics 死守卫（R3 只遍历两个永不在集合中的键）→ 删除。
-- 表头后零数据行被接受（isDemo:false + 0 结论）→ rows 为空抛错走演示回退。
-- R2 严重度恒 high，PRD 写 high/medium → 双萎缩 high、单萎缩 medium。
-- ContributionChart 负值条 label position 'right' 可能贴零轴侧 → 按符号分侧（正 right 负 left）。
-
-## 待确认（UNVERIFIED，记录）
-
-- vite preview（4180）无 /api 代理必然回退演示数据——README 承诺路径是 dev:all，属有意为之，README 补一句说明。
-- 浏览器级渲染细节（负值条标签遮挡）由按符号分侧修复 + 截图复核。
-
-## 审查覆盖（摘）
-
-diff 全部 19 个文件通读；fixture 与 data/raw 逐字节比对一致；独立 node 复算全部叙述数字与引擎输出一致（含 +8.8%/-5.9%/14.7pt/+1,141 万/±38.7%/−23.5%/−2,795 人）；6 组边界探针（prev=0、memberDev=0、全零同期、空行、空单元格、无日期文件名）直跑真实引擎/解析器；verify 原样重跑一致。
-
-## CONVERGE 分类（cycle 1）
-
-- 2 项 BLOCKER：阻断，修复。
-- 8 项 SUGGESTION：全部随修（均为小改且直接服务约束/信噪比）。
-- 2 项 UNVERIFIED：一项随修（label 分侧），一项 README 补说明。
-- review_cycles: 0 → 1，→ IMPLEMENT（以上为唯一工作项）→ VERIFY → REVIEW cycle 2。
+- [BLOCKER] server/index.ts 异步路由处理器无 rejection 兜底：PUT /api/actions/%（URIError）或引擎异常/目录缺失（readdirSync ENOENT）→ unhandled rejection → **进程 exit 1**（实测两路径均致命）；违背 PRD story 15「5xx」语义。
+- [MAJOR] 手动推送复用幂等门，已推过即 no-op——与 PRD/README「重推/补救」相反（自动推送成功但消息丢失时无法补救）。
+- [MAJOR] 自动推送被 await + 失败不落状态 → webhook 不可达时每次打开看板都等满 5s。
+- [MAJOR] notify chip「已推送」在已配置但推送失败/未推时仍显示——红队 KA4 要防的误信场景。
+- [MINOR×6] 写存储 IO 错误与参数校验同走 400；executedNote 非字符串可入库；同日期多份 CSV 未去重且 M2 文档化行为被静默改；notify 竞态未按 GRILL 决议注释明示；**tasks.md 残留 M2 内容（流程债）**；README 里程碑行自相矛盾。
+- [NIT] stubFetchByRoute log 参数死代码。
 
 ## 修复记录（cycle 1 → cycle 2）
 
-- BLOCKER 1：`yoy` 对 previous=0 返回 null，引擎/明细统一「同期无基数」叙述；R4 大额偏离路径仍可命中（合成行测试钉住：无 Infinity、进结论、delta=同期无基数）。
-- BLOCKER 2：`parseNumber` 空单元格抛错含行号（测试）；表头后零数据行同样抛错（随修 6）。
-- R3 标题按指标名 + 合成夹具两测（随修 1）；extractPeriod 无日期→上层抛错回退演示 + 测试（随修 2）；fmtWan 拆 delta/level 并与图表共享（随修 3）；R5 基数门槛 ≥100 人 + 正反两测（随修 4）；themedMetrics 死守卫删除（随修 5）；R2 双萎缩 high/单萎缩 medium + 两测（随修 7）；贡献图负值标签分侧 + 测试（待确认 1）；README 补 preview 说明（待确认 2）。
-- VERIFY：npm run verify exit 0 — 71/71 tests（9 files）。→ REVIEW cycle 2（新实例）。
+- BLOCKER：路由层统一 guard（.catch → 500，headersSent 防重）；decodeURIComponent 单独守卫 → 400；handleDashboard 构建单独 try → 500。测试：%/目录缺失两路径 400/500 且 /api/health 存活。
+- MAJOR：手动推送改直接 sendNotification + 落状态（真正重推，测试钉住 webhook×3）；自动推送改 void fire-and-forget（挂起 webhook 下 dashboard <2s 返回）；chip 三态（已推送·期次 / 已配置·未推送 / 推送未配置）。
+- MINOR：写盘 IO 5xx 与校验 400 分离；executedNote typeof 校验；parseHistory 同日期去重（首个生效+告警）；竞态注释补明示；README 里程碑更正；tasks.md 重写为实际 M3 拆解并勘误。
+- VERIFY：npm run verify exit 0 — 117/117 tests（13 files）。→ REVIEW cycle 2。
+
 
 ---
 
-# REVIEW Findings — M2（cycle 2）
+# REVIEW Findings — M3（cycle 2）
 
-**VERDICT: PASS（APPROVE_WITH_COMMENTS）** — cycle 1 全部修复独立复核通过；真实样本全部叙述数字独立复算吻合；verify 原样重跑一致（71/71）。无新增阻断。
+**VERDICT: PASS（APPROVE_WITH_COMMENTS）** — cycle 1 全部修复独立实测通过（进程兜底/重推/fire-and-forget/chip 三态）；数字自洽复算成立；verify 复现。余 4 MINOR + 6 NIT：
 
-- [Major] 下滑周（memberDev<0）中 topPull/topDrag 不分符号：镜像场景实测同一负贡献渠道被同时标为「最大拉动」与「最大拖累」（叙述假陈述，当前样本不触发但高概率周度场景）。复核标准：拉动只标正贡献、拖累只标负贡献 + 回归测试。
-- [Minor] 前端缺「HTTP 200 + isDemo:true」分支测试（任务 5 验收第三分支）。
-- [Nit] 空行被前置过滤导致报错行号偏移物理行；多列行静默接受（文档化容忍）；loading 设计取舍（已注释，记录）；同日期 CSV 平局取 readdir 顺序（文档化）。
-
-## CONVERGE 分类（cycle 2）
-
-- Major = 叙述正确性缺陷 → 阻断（review_cycles 1→2，最后额度）；Minor 随修；Nit：行号物理化随修，其余文档化/记录。
+- [MINOR] actionReview 无期次窗口、当周行动即入对照且永不下窗口（与 PRD「key=conclusionId+期次」相悖）
+- [MINOR] thisWeek 口径硬编码 memberSales
+- [MINOR] README 未明示 127.0.0.1 安全边界（GRILL 决议 5）
+- [MINOR] 手动/测试推送无前端按钮（PRD 仅承诺端点——记录为后续候选）
+- [NIT×6] c-cross 无冲突兜底、digest「要拍板 N 件事」计数粒度、PUT period 空串、tasks 未勾选、MetricPoint 注释、备注回滚不刷新
 
 ## 修复记录（cycle 2 → cycle 3）
 
-- Major（下滑周符号）：topPull/topDrag 改为按符号取（|贡献| 序首个正/负），R1 归因分句化条件拼接、R4 对照加缺失守卫；镜像夹具回归测试（分句级断言：同一渠道不同时双标、拉动句只含正贡献渠道、下滑渠道对照指向正贡献）。
-- Minor：前端补「200 + isDemo:true」第三分支测试。
-- Nit：空行不再预过滤（行号=物理行，含空行夹具测试）；多列行容忍与同日期平局行为文档化于代码注释。
-- VERIFY：npm run verify exit 0 — 74/74 tests（9 files）。→ REVIEW cycle 3（终审，最后额度）。
+- actionReview 加期次窗口（仅往期）+ 指标口径随所属结论（人数口径不显示万）；README 补本地监听警示；c-cross 兜底；digest 改「本周结论 N 条（高优先级 X 条待拍板）」；PUT period 空串 400；MetricPoint 注释更正；备注输入 key 重挂载（回滚刷新）；tasks.md 勾选。
+- 新增回归：期次窗口两例、指标口径例、digest 措辞。
+- VERIFY：npm run verify exit 0 — 119/119（13 files）。→ REVIEW cycle 3（终审）。
+
 
 ---
 
-# REVIEW Findings — M2（cycle 3）
+# REVIEW Findings — M3（cycle 3）
 
-**VERDICT: FAIL** — 前两轮全部修复复核通过、真实样本数字复算吻合、下滑周镜像 4 场景验证符号正确；但发现 1 个当前真实看板即触发的阻断：
+**VERDICT: FAIL** — cycle 1/2 修复全部实测通过、数字自洽成立；但发现 cycle-1 崩溃类残余路径：
 
-- [BLOCKER] R2/R5 的 metricIds[0]（memberSales/开卡）≠ breakdown 指标（新客购买/会员购买），导致证据区把人数渲染成万元/¥：贡献图标签「+0 万」（实际 +3,109 人）、归因表当前值「¥14,898」（人数）、R5 图注指标名与数据张冠李戴。违反数字自洽契约与 PRD story 7/8/15。复核标准：7 张卡逐一渲染，人数类归因不出现万/¥，图注与数据一致。
-- [SUGGESTION] R4 severity 恒 medium，PRD 写 medium/low——low 不可达；补判定或文档化。
-- [SUGGESTION] severityRank 与 M1 SEVERITY_RANK 重复——复用 sortConclusions。
-- [UNVERIFIED] UTF-8 BOM 表头会失配（Excel 导出常见）——加 BOM 剥离。
-
-## CONVERGE 分类（cycle 3）
-
-- BLOCKER：阻断（review_cycles 2→3，最后额度）：R2/R5 metricIds 重排（归因指标置首）+ ContributionChart 按指标格式选择标签格式（currency→万 / number→带符号人数）。
-- 2 SUGGESTION + BOM：随修（fastPath-only→low + 测试；复用 sortConclusions；BOM 剥离 + 测试）。
+- [BLOCKER] server/index.ts:48 `new URL()` 在 guard 之前同步执行——`GET //`（及 `http://[` 等）→ TypeError → 进程 exit 1（原始 socket 实测 4 种目标全部击杀；对照组正常）。
+- [MINOR] 演示回退期点行动落 `period:''` 记录 → `record.period !== report.period` 恒真 → 永久混入对照块。
+- [NIT] dashboard/engine 同名 totalOf 两种签名；actions 写非原子；GRILL 决议 6 措辞偏差（alert vs 行内，功能等价记录）；前端推送按钮维持后续候选。
 
 ## 修复记录（cycle 3 → cycle 4）
 
-- BLOCKER（人数渲染成万/¥）：R2 metricIds 重排为 [newMemberBuyers, newMemberRepeat, memberSales]、R5 重排为 [memberBuyers, memberNewCards]（归因指标置首，证据区格式与数据同源）；ContributionChart 标签按量纲格式化（currency→万 / number→带符号千分位），ConclusionCard 按 primaryMetric.format 传递。测试：R2/R5 metricIds[0] 断言、count 格式标签断言；真实数据 e2e 核对 7/7 结论对齐。
-- R4 分级落地：bigPath（含双路径）→ medium，fastPath-only（高增速低体量）→ low，正反两测（真实样本西南加盟仍 medium、合成低体量高波动 low）。
-- severityRank 重复 → 复用 src/data 的 sortConclusions。
-- BOM 剥离 + 测试（Excel 导出兼容）。
-- VERIFY：npm run verify exit 0 — 78/78 tests（9 files）。→ REVIEW cycle 4（终审）。
+- BLOCKER：`new URL` 包 try/catch → 400（原始 socket 回归测试：GET // → 400 且 health 存活）。
+- MINOR：review 侧过滤空 period + 前端 `setAction(…, persist)` 开关（演示期仅本地乐观更新不落库，两测钉住）。
+- NIT：dashboard totalOf→sumCurrentOf（消同名异签）；actions 原子写（tmp+rename）；措辞/按钮记录不改。
+- VERIFY：npm run verify exit 0 — 122/122（13 files）。→ REVIEW cycle 4（终审，最后额度）。
+
 
 ---
 
-# REVIEW Findings — M2（cycle 4，终审）
+# REVIEW Findings — M3（cycle 4，终审）
 
-**VERDICT: PASS（APPROVE）** — 两轴干净：前三轮修复全部独立复检成立；真实样本全部叙述数字自写解析器独立复算吻合；7/7 结论 metricIds[0] 与归因指标一致、量纲链路闭合（number→count / currency→万）；verify 原样复现（exit 0，78/78）；无 Infinity/NaN/undefined、无范围外改动、无注入面。
+**VERDICT: PASS（APPROVE_WITH_COMMENTS）** — 前三轮修复全部独立实测成立（原始 socket GET //→400 存活、真实 webhook 三语义、空 period 过滤、数字自洽独立复算吻合）；verify 复现（122/122）。无阻断。
 
 ## CONVERGE（cycle 4）
 
-无阻断 → SHIP。3 条建议记录为 M3 打磨项：
-1. extractPeriod 紧凑分支接受任意 8 位数字串（99999999.csv 会被当日期且排序最高）→ 校验月日范围。
-2. dashboard catch-all 建议收窄为仅 ReportParseError（引擎缺陷显式上抛而非吞入演示回退）。
-3. BreakdownTable 金额列全精度元展示，可复用 formatWanDelta/Level 提升与图表的一致可读性。
+无阻断 → SHIP。7 项 minor/nit 记录为后续打磨：
+1. 对照块"往期"过滤而非"最近 1-2 期"窗口——数月后无界累积（建议 period 降序+截断）。
+2. HTTP 路径静默丢弃非法 executedNote/text/dimension（纯函数校验在 HTTP 不可达，应直传得 400）。
+3. writeNotifyState 非原子写（对称性）。
+4. digest 结论列表未显式 severity 排序（当前依赖引擎输出顺序）。
+5. POST /api/notify/push 可被浏览器跨站触发（CSRF，127.0.0.1+无鉴权边界已文档化，影响=多发摘要）。
+6. validMonthDay 不查月份长度（2026-02-31 接受，仅排序键无后果）。
+7. useActionStore 回滚 refetch 与后续点击的小竞态（数据无损，GRILL 决议 6 范围）。

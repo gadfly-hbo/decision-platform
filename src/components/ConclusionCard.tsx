@@ -1,4 +1,5 @@
 import type { ActionStatus, Conclusion, MetricDef, MetricSeries } from '../data'
+import type { StoredActionMap } from '../useActionStore'
 import { DerivationChain } from './DerivationChain'
 import { MetricChart } from './MetricChart'
 import { ContributionChart } from './ContributionChart'
@@ -17,8 +18,8 @@ interface ConclusionCardProps {
   onToggle: () => void
   metricFor: (id: string) => MetricDef | undefined
   seriesFor: (id: string) => MetricSeries | undefined
-  actionStatus: Record<string, ActionStatus>
-  onActionStatusChange: (actionId: string, status: ActionStatus) => void
+  actionState: StoredActionMap
+  onActionAction: (actionId: string, patch: { status: ActionStatus; executedNote?: string }) => void
 }
 
 export function ConclusionCard({
@@ -27,8 +28,8 @@ export function ConclusionCard({
   onToggle,
   metricFor,
   seriesFor,
-  actionStatus,
-  onActionStatusChange,
+  actionState,
+  onActionAction,
 }: ConclusionCardProps) {
   const primaryMetric = metricFor(conclusion.metricIds[0])
 
@@ -86,8 +87,9 @@ export function ConclusionCard({
               <ActionItem
                 key={action.id}
                 action={action}
-                status={actionStatus[action.id] ?? 'pending'}
-                onStatusChange={(status) => onActionStatusChange(action.id, status)}
+                status={actionState[action.id]?.status ?? 'pending'}
+                note={actionState[action.id]?.executedNote}
+                onAction={(patch) => onActionAction(action.id, patch)}
               />
             ))}
           </section>

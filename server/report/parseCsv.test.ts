@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { parseMemberWeeklyCsv, yoy, ReportParseError } from './parseCsv'
+import { parseMemberWeeklyCsv, extractPeriod, yoy, ReportParseError } from './parseCsv'
 
 const sampleCsv = readFileSync(join(__dirname, 'testdata', 'sample.csv'), 'utf-8')
 
@@ -94,4 +94,11 @@ test('带 UTF-8 BOM 的表头可正常解析', () => {
   const bomCsv = '\uFEFF' + sampleCsv
   const report = parseMemberWeeklyCsv(bomCsv, 'x-2026-09-26.csv')
   expect(report.rows).toHaveLength(22)
+})
+
+test('紧凑 8 位串做月日范围校验：非法日期不作为期次', () => {
+  expect(extractPeriod('周报99999999.csv')).toBe('')
+  expect(extractPeriod('周报20261301.csv')).toBe('')
+  expect(extractPeriod('周报20260932.csv')).toBe('')
+  expect(extractPeriod('周报20260926.csv')).toBe('2026-09-26')
 })

@@ -1,5 +1,5 @@
 import type { BreakdownRow, MetricDef } from '../data'
-import { formatMetricValue } from '../data'
+import { formatMetricValue, formatWanDelta, formatWanLevel } from '../data'
 
 interface BreakdownTableProps {
   rows: BreakdownRow[]
@@ -24,11 +24,17 @@ export function BreakdownTable({ rows, metricDef }: BreakdownTableProps) {
           <tr key={row.dimension}>
             <td>{row.dimension}</td>
             <td className={row.contribution >= 0 ? 'pos' : 'neg'}>
-              {row.contribution >= 0
-                ? `+${row.contribution.toFixed(2)}`
-                : row.contribution.toFixed(2)}
+              {metricDef.format === 'currency'
+                ? formatWanDelta(row.contribution)
+                : row.contribution >= 0
+                  ? `+${row.contribution.toFixed(2)}`
+                  : row.contribution.toFixed(2)}
             </td>
-            <td>{formatMetricValue(metricDef, row.value)}</td>
+            <td>
+              {metricDef.format === 'currency'
+                ? formatWanLevel(row.value)
+                : formatMetricValue(metricDef, row.value)}
+            </td>
             <td>{row.delta}</td>
           </tr>
         ))}

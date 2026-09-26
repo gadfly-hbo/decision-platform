@@ -1,3 +1,7 @@
 node_modules/
 dist/
 .flow/state.json
+# M3 运行期本地状态（凭证/行动记录/推送状态——不随 git 走，双机各自独立）
+data/notify.json
+data/notify-state.json
+data/actions.json
