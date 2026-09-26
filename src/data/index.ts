@@ -1,3 +1,3 @@
 export * from './types'
-export { sortConclusions, formatMetricValue } from './format'
+export { sortConclusions, formatMetricValue, formatWanDelta, formatWanLevel } from './format'
 export { demoData } from './demo'

@@ -2,11 +2,11 @@
 
 > 来源：`.flow/prd.md`；auto 模式拆解自批准（2026-09-26）。无 issue tracker，落盘 `.flow/tasks.md`。
 
-- [ ] 1. 周报解析层：CSV → WeeklyReport（重算同比、容错、显式报错）
-- [ ] 2. 规则引擎：检测规则 + 规模门槛 + 归因 → Conclusion[]
-- [ ] 3. 后端接线：data/raw 发现最新 CSV → /api/dashboard 真实计算（isDemo/period/注入）
-- [ ] 4. 归因贡献条形图：纯函数 option + 组件 + 证据区接入
-- [ ] 5. 前端接线与收尾：useDashboardData（fetch/回退/标注）+ 端到端 + 走查更新
+- [x] 1. 周报解析层：CSV → WeeklyReport（重算同比、容错、显式报错）
+- [x] 2. 规则引擎：检测规则 + 规模门槛 + 归因 → Conclusion[]
+- [x] 3. 后端接线：data/raw 发现最新 CSV → /api/dashboard 真实计算（isDemo/period/注入）
+- [x] 4. 归因贡献条形图：纯函数 option + 组件 + 证据区接入
+- [x] 5. 前端接线与收尾：useDashboardData（fetch/回退/标注）+ 端到端 + 走查更新
 
 ---
 

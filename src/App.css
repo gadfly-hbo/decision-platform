@@ -391,3 +391,18 @@
 .conclusion-list > li {
   min-width: 0;
 }
+
+/* 演示数据标识（warn 语义对，色+文字双通道） */
+.demo-chip {
+  display: inline-flex;
+  align-items: center;
+  margin-left: var(--sp-sm);
+  padding: 0 10px;
+  border-radius: var(--r-pill);
+  background: var(--warn-soft);
+  border: 1px solid var(--warn-line);
+  color: var(--warn);
+  font-size: var(--fs-meta);
+  line-height: 1.6;
+  vertical-align: middle;
+}

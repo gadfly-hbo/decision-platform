@@ -20,3 +20,13 @@ export function formatMetricValue(def: MetricDef, value: number): string {
       return new Intl.NumberFormat('zh-CN').format(value)
   }
 }
+
+/** 偏离量（万元，带符号）：+442 万 / -268 万 */
+export function formatWanDelta(v: number): string {
+  return `${v >= 0 ? '+' : '-'}${Math.round(Math.abs(v) / 10000).toLocaleString('zh-CN')} 万`
+}
+
+/** 存量水平值（万元，无符号——正负号只属于偏离语义）：1,169 万 */
+export function formatWanLevel(v: number): string {
+  return `${Math.round(Math.abs(v) / 10000).toLocaleString('zh-CN')} 万`
+}

@@ -1,12 +1,13 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import './App.css'
-import { demoData, sortConclusions } from './data'
+import { sortConclusions } from './data'
 import type { ActionStatus, DashboardData } from './data'
+import { useDashboardData } from './useDashboardData'
 import { ConclusionCard } from './components/ConclusionCard'
 import { ActionSummary } from './components/ActionSummary'
 
 export interface AppProps {
-  /** 数据边界缝：默认演示数据；M2 接真实数据源时由此替换 */
+  /** 数据边界缝：注入即直接使用（测试/嵌入），不拉取后端；缺省从 /api/dashboard 拉取 */
   data?: DashboardData
 }
 
@@ -17,19 +18,25 @@ const initialActionStatus = (data: DashboardData): Record<string, ActionStatus> 
     ),
   )
 
-export default function App({ data = demoData }: AppProps) {
+export default function App({ data: injected }: AppProps = {}) {
+  const data = useDashboardData(injected)
   const conclusions = sortConclusions(data.conclusions)
-  const metricById = useMemo(() => new Map(data.metrics.map((metric) => [metric.id, metric])), [data])
-  const seriesById = useMemo(
-    () => new Map(data.series.map((series) => [series.metricId, series])),
-    [data],
-  )
+  const metricById = new Map(data.metrics.map((metric) => [metric.id, metric]))
+  const seriesById = new Map(data.series.map((series) => [series.metricId, series]))
   const [expandedIds, setExpandedIds] = useState<Set<string>>(
     () => new Set(conclusions.length > 0 ? [conclusions[0].id] : []),
   )
   const [actionStatus, setActionStatus] = useState<Record<string, ActionStatus>>(() =>
     initialActionStatus(data),
   )
+
+  // 数据源切换（演示回退 → 真实计算）时，展开态与行动状态按新数据重置
+  const dataKey = data.period ?? data.window
+  useEffect(() => {
+    setExpandedIds(new Set(conclusions.length > 0 ? [conclusions[0].id] : []))
+    setActionStatus(initialActionStatus(data))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dataKey])
 
   const toggle = (id: string) =>
     setExpandedIds((prev) => {
@@ -52,12 +59,15 @@ export default function App({ data = demoData }: AppProps) {
         <p className="overview-lede">{data.lede}</p>
         <p className="overview-meta">
           数据窗口 {data.window} · 更新于 {data.updatedAt}
+          {data.isDemo && <span className="chip demo-chip">演示数据</span>}
         </p>
       </header>
       {conclusions.length === 0 ? (
         <div className="empty">
           <p className="empty-title">暂无需要拍板的结论</p>
-          <p className="empty-hint">数据窗口内未触发任何规则；接入真实数据源后此处将给出下一次分析的结论。</p>
+          <p className="empty-hint">
+            数据窗口内未触发任何规则；将最新周报 CSV 放入 data/raw/ 后刷新即可。
+          </p>
         </div>
       ) : (
         <section aria-label="结论区">

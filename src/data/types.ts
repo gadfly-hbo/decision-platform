@@ -82,4 +82,8 @@ export interface DashboardData {
   metrics: MetricDef[]
   series: MetricSeries[]
   conclusions: Conclusion[]
+  /** true = 演示数据回退（无真实数据或解析失败时置位，前端据此标注） */
+  isDemo?: boolean
+  /** 数据期次（真实数据来自周报文件名，如 2026-09-26） */
+  period?: string
 }

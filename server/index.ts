@@ -1,6 +1,7 @@
 import { createServer, type Server, type ServerResponse } from 'node:http'
+import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { demoData } from '../src/data/demo'
+import { buildDashboardData } from './dashboard'
 
 /** 默认端口避开兄弟项目：5173/4173/8787/8080/5021/2122/1234 均已占用 */
 export const DEFAULT_PORT = 8642
@@ -10,11 +11,21 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body))
 }
 
+export interface ServerOptions {
+  /** 周报数据目录（默认 <项目根>/data/raw），测试可注入 fixture 目录 */
+  dataDir?: string
+}
+
 /**
- * M2 前的最小后端：为「一键启动前后端」提供真实进程，并 seed 数据源接口。
- * /api/dashboard 直接复用前端数据层的 demoData（单一事实源），M2 接 DuckDB 后替换实现。
+ * M2：/api/dashboard 由 dataDir 最新周报计算（解析 → 规则引擎 → DashboardData）；
+ * 无数据/解析失败回退演示数据（isDemo=true）。M2 之前的最小后端仅 health + demoData。
  */
-export function startServer(port: number = DEFAULT_PORT, host = '127.0.0.1'): Server {
+export function startServer(
+  port: number = DEFAULT_PORT,
+  host = '127.0.0.1',
+  options: ServerOptions = {},
+): Server {
+  const dataDir = options.dataDir ?? join(process.cwd(), 'data', 'raw')
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`)
     if (req.method === 'GET' && url.pathname === '/api/health') {
@@ -25,7 +36,7 @@ export function startServer(port: number = DEFAULT_PORT, host = '127.0.0.1'): Se
       })
     }
     if (req.method === 'GET' && url.pathname === '/api/dashboard') {
-      return sendJson(res, 200, demoData)
+      return sendJson(res, 200, buildDashboardData(dataDir))
     }
     sendJson(res, 404, { error: 'not found' })
   })

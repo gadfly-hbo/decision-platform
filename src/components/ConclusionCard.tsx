@@ -1,6 +1,7 @@
 import type { ActionStatus, Conclusion, MetricDef, MetricSeries } from '../data'
 import { DerivationChain } from './DerivationChain'
 import { MetricChart } from './MetricChart'
+import { ContributionChart } from './ContributionChart'
 import { BreakdownTable } from './BreakdownTable'
 import { ActionItem } from './ActionItem'
 
@@ -54,12 +55,22 @@ export function ConclusionCard({
           </section>
           <section className="evidence-block">
             <h3 className="block-title">核心指标</h3>
-            {conclusion.metricIds.map((metricId) => {
-              const def = metricFor(metricId)
-              const series = seriesFor(metricId)
-              if (!def || !series) return null
-              return <MetricChart key={metricId} def={def} series={series} />
-            })}
+            {conclusion.metricIds.some((metricId) => seriesFor(metricId)) ? (
+              conclusion.metricIds.map((metricId) => {
+                const def = metricFor(metricId)
+                const series = seriesFor(metricId)
+                if (!def || !series) return null
+                return <MetricChart key={metricId} def={def} series={series} />
+              })
+            ) : conclusion.breakdown.length > 0 && primaryMetric ? (
+              <ContributionChart
+                rows={conclusion.breakdown}
+                metricName={primaryMetric.name}
+                labelFormat={primaryMetric.format === 'currency' ? 'wan' : 'count'}
+              />
+            ) : (
+              <p className="empty-lite">该结论暂无可视化指标</p>
+            )}
           </section>
           <section className="evidence-block">
             <h3 className="block-title">归因明细</h3>

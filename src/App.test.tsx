@@ -3,9 +3,14 @@ import { vi } from 'vitest'
 import App from './App'
 import { demoData } from './data'
 
-// ECharts canvas 属系统边界：App 级测试 stub 图表组件，图表配置由 MetricChart.test.ts 纯函数测试覆盖
+// ECharts canvas 属系统边界：App 级测试 stub 图表组件，图表配置由各自纯函数测试覆盖
 vi.mock('./components/MetricChart', () => ({
   MetricChart: ({ def }: { def: { id: string } }) => <div data-testid={`chart-${def.id}`} />,
+}))
+vi.mock('./components/ContributionChart', () => ({
+  ContributionChart: ({ metricName }: { metricName: string }) => (
+    <div data-testid={`contrib-${metricName}`} />
+  ),
 }))
 
 const cards = () => screen.getAllByRole('article')
@@ -161,4 +166,49 @@ test('数据缝健壮性：未知指标 id 与空序列不崩溃（负例路径�
   expect(screen.getByText(/ROI 0\.72/)).toBeInTheDocument()
   expect(within(cards()[0]).getByText(/指标缺失/)).toBeInTheDocument()
   expect(screen.queryByTestId('chart-unknown-metric')).not.toBeInTheDocument()
+})
+
+test('后端返回真实数据时切换展示（含真实结论与贡献图）', async () => {
+  const realData = {
+    ...demoData,
+    title: '决策看板',
+    window: '2026-09-26（本期 vs 去年同期）',
+    updatedAt: '2026-09-26 周报',
+    period: '2026-09-26',
+    isDemo: false,
+    metrics: [
+      { id: 'memberSales', name: '会员零售额', unit: '元', caliber: '会员销售额', format: 'currency' },
+    ],
+    series: [],
+    conclusions: [
+      {
+        ...demoData.conclusions[0],
+        id: 'c-divergence',
+        title: '会员零售额同比 +8.8%，与大盘零售额 -5.9% 背离',
+        metricIds: ['memberSales'],
+      },
+    ],
+  }
+  vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve(realData) })))
+  render(<App />)
+  expect(await screen.findByText(/背离/)).toBeInTheDocument()
+  expect(screen.queryByText('演示数据')).not.toBeInTheDocument()
+  expect(screen.getByTestId('contrib-会员零售额')).toBeInTheDocument()
+  expect(screen.getByText(/2026-09-26 周报/)).toBeInTheDocument()
+  vi.unstubAllGlobals()
+})
+
+test('后端不可用时保持演示数据并标注「演示数据」', async () => {
+  vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('backend down'))))
+  render(<App />)
+  expect(await screen.findByText('演示数据')).toBeInTheDocument()
+  expect(screen.getByText(/ROI 0\.72/)).toBeInTheDocument()
+  vi.unstubAllGlobals()
+})
+
+test('后端 200 返回 isDemo:true 载荷时直接标注演示数据（第三分支）', async () => {
+  vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ ...demoData, isDemo: true }) })))
+  render(<App />)
+  expect(await screen.findByText('演示数据')).toBeInTheDocument()
+  vi.unstubAllGlobals()
 })
