@@ -1,94 +1,83 @@
-# 任务拆解 · 决策看板 M1
+# 任务拆解 · M2 会员周报异动检测与归因
 
-> 来源：`.flow/prd.md`；拆解自批准（dev-flow ISSUES 阶段，2026-09-25）。无 issue tracker，落盘 `.flow/tasks.md`。
+> 来源：`.flow/prd.md`；auto 模式拆解自批准（2026-09-26）。无 issue tracker，落盘 `.flow/tasks.md`。
 
-- [x] 1. 脚手架与验证基线
-- [x] 2. 数据层契约与演示数据（含双域走查）
-- [x] 3. 结论区 tracer bullet
-- [x] 4. 证据区四块（推导链路/指标图/归因表/行动）
-- [x] 5. 行动汇总区与收尾走查
+- [ ] 1. 周报解析层：CSV → WeeklyReport（重算同比、容错、显式报错）
+- [ ] 2. 规则引擎：检测规则 + 规模门槛 + 归因 → Conclusion[]
+- [ ] 3. 后端接线：data/raw 发现最新 CSV → /api/dashboard 真实计算（isDemo/period/注入）
+- [ ] 4. 归因贡献条形图：纯函数 option + 组件 + 证据区接入
+- [ ] 5. 前端接线与收尾：useDashboardData（fetch/回退/标注）+ 端到端 + 走查更新
 
 ---
 
-## 1. 脚手架与验证基线
+## 1. 周报解析层：CSV → WeeklyReport
 
 ### What to build
-项目地基（prefactoring 切片）：手工 Vite + React + TypeScript 脚手架、Vitest + Testing Library 测试基建、`npm run verify` 三重门命令、git 基线（init + .gitignore + .flow artifacts 提交）。完成后 `npm run verify` 全绿（含一个最小冒烟测试：应用外壳可渲染出产品句）。
+解析会员周报 CSV 为类型化 WeeklyReport：自动定位表头行（前导标题行容错）、22 列结构校验（缺列显式报错带行号）、每指标存 {current, previous} 且**同比一律重算**（丢弃声明列）、期次从文件名提取。真实样本复制为 testdata 夹具。
 
 ### Acceptance criteria
-- [ ] `npm run verify`（tsc --noEmit && vitest run && vite build）本地一次通过
-- [ ] 存在最小冒烟测试：渲染 App 外壳，断言产品说明句可见
-- [ ] git 仓库已初始化，基线提交包含 .flow durable artifacts，`.flow/state.json` 被 gitignore
-- [ ] 依赖仅限：react/react-dom/echarts + vite 系/测试系（无 UI 组件库、无 CSS 框架、无日期库）
+- [ ] 解析真实样本夹具：22 行、6 指标、同比为重算值（直营浙江零售额 = -1.91% 而非源表声明的 -1.34%）
+- [ ] 缺列/坏数字行抛结构化错误（含行号），不静默丢数据
+- [ ] 期次提取（如 2026-09-26）可用于 period 字段
+- [ ] 解析器纯函数测试全绿
 
 ### Blocked by
 None - can start immediately
 
 ---
 
-## 2. 数据层契约与演示数据（含双域走查）
+## 2. 规则引擎：检测规则 + 规模门槛 + 归因 → Conclusion[]
 
 ### What to build
-看板的唯一数据事实源：类型化数据模块，导出指标定义（id/名称/单位/口径/格式化）、指标序列（含基准线）、结论（严重度/标题句/摘要/数据窗口/推导步骤/指标引用/归因明细/建议行动）。演示数据为线上经营·渠道投放域：4 条结论覆盖高/中/低严重度、14 天窗口、归因到渠道/计划两级。另附"电商经营"假想数据的映射走查记录（验证接口不贴合单一域，红队 KA3 缓解）。
+纯函数规则引擎：输入 WeeklyReport，输出 M1 类型的 Conclusion[]。规则集与参数集中在 RULES 常量：整体背离（会员 vs 大盘零售额方向相反差≥10pt，high）、整体结构（会员零售额≥+5% 且新客/复购≤0）、整体异动（|同比|≥5%）、渠道异动（|同比|≥30% 且 基数占比≥1% 且 |偏离额|≥50万，按 |偏离额| 取前 N）、交叉信号（开卡≥+5% 且购买≤-20%）。归因 contribution=本期−同期、dimension=运营模式·二级渠道、按 |贡献| 降序。建议行动模板措辞保守并标注人工确认。全局结论上限 8 条、按严重度排序。
 
 ### Acceptance criteria
-- [ ] 类型契约覆盖 PRD Implementation Decisions 中的数据层契约，无 UI 内联业务数据
-- [ ] 演示数据 4 条结论按严重度排序可验证（高→中→中→低）
-- [ ] 每条结论的推导链路含 检测→归因→规则匹配→建议 四类步骤
-- [ ] 归因明细按偏离贡献绝对值降序
-- [ ] 双域走查记录落盘（.flow/ 或代码注释旁的 docs），电商域假想数据能映射进同一类型
-- [ ] 数据层行为测试通过（排序/格式化/口径引用一致性）
+- [ ] 真实样本断言：整体背离结论存在且数字可复算（+8.8% vs -5.9%）；西南加盟/鲁苏加盟（带运营模式）进入渠道异动归因
+- [ ] 门槛过滤实证：湖北直营（+239.9%，基数 66 万/占比 0.15%）不进结论；新零售运营组交叉信号命中
+- [ ] 结论数 ≤8；每条 derivation 四步齐、breakdown 按贡献降序
+- [ ] 叙述数字（占比/偏离）由计算生成，测试复算对照
 
 ### Blocked by
-- 1（需要测试基建）
+- 1
 
 ---
 
-## 3. 结论区 tracer bullet
+## 3. 后端接线：/api/dashboard 真实计算
 
 ### What to build
-第一条纵切弹道：概览头（产品句/数据窗口/更新时间）+ 结论区列表（严重度 chip 色+文字双通道、一句话摘要、数据窗口标注），结论卡可展开/收起，默认展开第一条（最高严重度），可多开。展开态先给骨架（占位四块结构），切片 4 再填实。
+`/api/dashboard`：发现 `data/raw/` 最新 CSV（文件名日期串排序）→ 解析 → 规则引擎 → DashboardData（period=期次）；目录为空/解析失败时回退 demoData 并置 `isDemo: true`。数据目录可注入（默认 data/raw，测试用 fixture）。DashboardData 类型扩展可选 isDemo/period。
 
 ### Acceptance criteria
-- [ ] 打开页面 30 秒内可扫读全部结论标题与严重度（user story 1/2/3）
-- [ ] 严重度 chip 同时有语义色与文字（Xanthil 双通道，story 15）
-- [ ] 默认展开第一条，其余收起；点击切换，可多开（GRILL 决议 4）
-- [ ] 概览头含产品说明句、数据窗口与更新时间（story 9/13）
-- [ ] 渲染测试：断言排序、chip 文字、展开交互
+- [ ] 注入含真实样本的目录：返回真实结论（title/期次/归因可复算）
+- [ ] 注入空目录：返回 demoData + isDemo true
+- [ ] 既有 /api/health、404 行为不回归；server 测试全绿
 
 ### Blocked by
 - 2
 
 ---
 
-## 4. 证据区四块（推导链路/指标图/归因表/行动）
+## 4. 归因贡献条形图
 
 ### What to build
-结论展开态填实四块：① 推导链路有序步骤（检测→归因→规则匹配→建议，带编号）；② 核心指标 ECharts 折线图（14 天序列 + 基准/阈值标线，薄封装 init/update/dispose/resize）；③ 归因明细表（按偏离贡献降序，正负偏离可区分）；④ 建议行动（动作 + 预期影响 + 待定/采纳/驳回状态标记，状态提升到应用层）。
+证据区图表适配截面数据：`buildContributionOption` 纯函数（横向条形、按 |contribution| 排序、正=ok 负=fail 分色、数值格式化）+ ContributionChart 组件（echarts/core 边界内薄封装）+ ConclusionCard 接入：结论有 series 用折线（演示路径不变），无 series 有 breakdown 用贡献条形图。
 
 ### Acceptance criteria
-- [ ] 展开即见完整推导链路，步骤类型可辨识（story 4）
-- [ ] 指标图渲染折线与基准线（测试 stub canvas，断言 option 关键结构：序列与 markLine，story 5）
-- [ ] 归因表按贡献降序、偏离方向语义色（story 6）
-- [ ] 行动可切换状态且状态变化在 UI 双通道可见（story 7/8）
-- [ ] 图表容器随窗口 resize（薄封装验证）
+- [ ] option 纯函数测试：排序、分色映射、数值标签
+- [ ] 组件测试（mock echarts/core）：init/setOption/resize/dispose 契约
+- [ ] 真实数据结论展开可见贡献图；演示数据路径不回归（既有测试全绿）
 
 ### Blocked by
-- 3
+- 2
 
 ---
 
-## 5. 行动汇总区与收尾走查
+## 5. 前端接线与收尾
 
 ### What to build
-页面收尾：行动汇总区（聚合全部建议行动 + 状态计数与过滤）+ 数据缺失空状态（接口预留）+ ≤900px 响应式单列 + Xanthil token 全量对齐走查（色彩对/排版档位/圆角/间距/焦点环）+ 对照 PRD user stories 的最终人工走查（30 秒标准）。
+`useDashboardData`：拉取 /api/dashboard（loading 态；失败回退 demoData）；App 接线；概览头显示 period、isDemo 时显示"演示数据"chip（warn 色+文字双通道）。收尾：一键启动端到端（dev-all 起来 curl /api/dashboard 为真实数据、页面正常）、真实数据走查文档补 M2 结论、README 简要使用说明（每周放 CSV）。
 
 ### Acceptance criteria
-- [ ] 行动汇总区展示全部行动与状态，与结论卡内状态联动一致（story 8）
-- [ ] 空数据时显示明确空状态而非白屏（story 14，接口预留）
-- [ ] ≤900px 单列可用，无横向溢出（story 16）
-- [ ] Xanthil 走查清单留档（token 对照，逐项核对）
-- [ ] `npm run verify` 全绿；PRD 16 条 user stories 逐条对照有落点
-
-### Blocked by
-- 4
+- [ ] hook 测试三分支：成功（真实数据渲染）、失败（回退+演示标注）、后端返回 isDemo（直接标注）
+- [ ] 端到端：dev-all 起来后 /api/dashboard 返回真实计算、前端页面标题/期次正确
+- [ ] `npm run verify` 全绿；走查文档与 README 更新
