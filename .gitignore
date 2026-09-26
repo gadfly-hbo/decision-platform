@@ -5,3 +5,4 @@ dist/
 data/notify.json
 data/notify-state.json
 data/actions.json
+.DS_Store
