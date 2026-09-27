@@ -1,74 +1,73 @@
-# REVIEW Findings — M3（cycle 1）
+# M4 REVIEW cycle 1（2026-09-27，fresh code-reviewer 子代理）
 
-> 审查者：code-reviewer 子代理（新实例）。基线 d13c84fff902078c084ca8811ac5c7a18ecc1d4b，baseline_dirty=[.zcodeignore]。要点保存。
+## VERDICT: FAIL
 
-**VERDICT: FAIL（REQUEST_CHANGES）** — 三大件与打磨项主体落地、数字自洽独立复算成立、verify 证据复现；但：
+整体忠实于 proposal/PRD 决策（期次校验、PUT 防伪、静态服务、launchd/9642、README 双机改写落地，测试证据扎实，SDK API 真实核对无编造），但 1 个 MAJOR 违反 GRILL 决议 1 整体成功语义。
 
-- [BLOCKER] server/index.ts 异步路由处理器无 rejection 兜底：PUT /api/actions/%（URIError）或引擎异常/目录缺失（readdirSync ENOENT）→ unhandled rejection → **进程 exit 1**（实测两路径均致命）；违背 PRD story 15「5xx」语义。
-- [MAJOR] 手动推送复用幂等门，已推过即 no-op——与 PRD/README「重推/补救」相反（自动推送成功但消息丢失时无法补救）。
-- [MAJOR] 自动推送被 await + 失败不落状态 → webhook 不可达时每次打开看板都等满 5s。
-- [MAJOR] notify chip「已推送」在已配置但推送失败/未推时仍显示——红队 KA4 要防的误信场景。
-- [MINOR×6] 写存储 IO 错误与参数校验同走 400；executedNote 非字符串可入库；同日期多份 CSV 未去重且 M2 文档化行为被静默改；notify 竞态未按 GRILL 决议注释明示；**tasks.md 残留 M2 内容（流程债）**；README 里程碑行自相矛盾。
-- [NIT] stubFetchByRoute log 参数死代码。
+## 发现
 
-## 修复记录（cycle 1 → cycle 2）
+**MAJOR-1 [implementation/spec]** 看板兜底推送只发文本却落 lastPushedPeriod，导致该期次高优审批卡片永不发出
+- 证据：server/index.ts:257（handleDashboard 兜底调 maybePushNewPeriod，只走 webhook 文本，imChannel 未传入）→ server/notify.ts:132（pushPeriodIdempotent 成功即落状态）→ server/notify.ts:173（scanAndPush 见状态即跳过，卡片通道被幂等门挡死）。
+- 后果：导入新周报后 60s 扫描前打开看板且 notify.json 配了 webhook → 文本推送落状态 → 本期全部 high 卡片静默缺失，POST /api/notify/push 手动重推同样只发文本，无恢复手段。违反 GRILL 决议 1 与 user story 15。
+- 修复：handleDashboard 兜底改调 scanAndPush（透传 imChannel）。
+- 复检：配好 im.json+notify.json 起服务，导入新期次后立刻 GET /api/dashboard，断言 sendApproval（文本+卡片）随后仍被发出。
 
-- BLOCKER：路由层统一 guard（.catch → 500，headersSent 防重）；decodeURIComponent 单独守卫 → 400；handleDashboard 构建单独 try → 500。测试：%/目录缺失两路径 400/500 且 /api/health 存活。
-- MAJOR：手动推送改直接 sendNotification + 落状态（真正重推，测试钉住 webhook×3）；自动推送改 void fire-and-forget（挂起 webhook 下 dashboard <2s 返回）；chip 三态（已推送·期次 / 已配置·未推送 / 推送未配置）。
-- MINOR：写盘 IO 5xx 与校验 400 分离；executedNote typeof 校验；parseHistory 同日期去重（首个生效+告警）；竞态注释补明示；README 里程碑更正；tasks.md 重写为实际 M3 拆解并勘误。
-- VERIFY：npm run verify exit 0 — 117/117 tests（13 files）。→ REVIEW cycle 2。
+**MINOR-1 [implementation]** 卡片回调不校验操作者身份，转发卡的任意租户成员可代批
+- 证据：server/im-feishu.ts:110——operatorName 未比对 evt.operator.openId 与 config.approverUserId。
+- 修复：回调校验 openId === approverUserId，不符返回拒绝回执。
+- 复检：另一 open_id 点卡，store 不变且回执拒绝。
 
+**MINOR-2 [spec]** PC 标记 executed 清空卡片审批人留痕
+- 证据：server/actions.ts:68-73——PC PUT executed 时 decidedBy 被丢弃，主流程终点（卡片采纳→运营执行）只剩「PC·时间」。
+- 修复：status=executed 且 patch 无 decidedBy 时保留既有 decided*。
+- 复检：卡片 accepted（张三）后 PC executed，看板仍显示张三留痕。
 
----
+**MINOR-3 [implementation]** cardAction 内 writeActionStore 同步抛错冒泡且无回执
+- 证据：server/im-feishu.ts:113-119——磁盘异常传播进 SDK 事件层，审批未落库且卡片不更新。
+- 修复：handler 整体 try/catch，失败 best-effort updateCard「落库失败，请重试」。
+- 复检：注入 write 抛错，进程存活且卡片收到失败回执。
 
-# REVIEW Findings — M3（cycle 2）
+**NIT-1** README「60 秒内自动推送」最坏 ≈62s，与验收「≤1 分钟」有秒级出入；改「约 1 分钟」。
+**NIT-2** notify.ts:121 注释引「GRILL 决议 4」编号误导（应为决议 3 语境）。
+**NIT-3** scripts/feishu-demo.ts 回调无重入守卫（一次性前置门脚本，无实际影响，仅记录）。
 
-**VERDICT: PASS（APPROVE_WITH_COMMENTS）** — cycle 1 全部修复独立实测通过（进程兜底/重推/fire-and-forget/chip 三态）；数字自洽复算成立；verify 复现。余 4 MINOR + 6 NIT：
+## 测试证据质量核查（正面确认）
 
-- [MINOR] actionReview 无期次窗口、当周行动即入对照且永不下窗口（与 PRD「key=conclusionId+期次」相悖）
-- [MINOR] thisWeek 口径硬编码 memberSales
-- [MINOR] README 未明示 127.0.0.1 安全边界（GRILL 决议 5）
-- [MINOR] 手动/测试推送无前端按钮（PRD 仅承诺端点——记录为后续候选）
-- [NIT×6] c-cross 无冲突兜底、digest「要拍板 N 件事」计数粒度、PUT period 空串、tasks 未勾选、MetricPoint 注释、备注回滚不刷新
+- 单测非摆设：路径穿越负例、PUT 防伪负例、调度器 stop、非法载荷 5 组、IM 失败不落状态、过期/重复/非法三态；断言针对外部行为，无同义反复；mock 不吞错。
+- SDK 猎杀假证据：createLarkChannel/send/updateCard/on('cardAction')/disconnect 与 CardActionEvent 类型在 @larksuiteoapi/node-sdk@1.74.0 全部真实存在，适配器用法与 SDK 契约一致。
+- lockfile 新增均为 lark SDK 传递依赖，无夹带。
+- 负例缺口：未覆盖「卡片留痕后 PC executed」的留痕保留（MINOR-2 行为盲点）。
 
-## 修复记录（cycle 2 → cycle 3）
+## UNVERIFIED
 
-- actionReview 加期次窗口（仅往期）+ 指标口径随所属结论（人数口径不显示万）；README 补本地监听警示；c-cross 兜底；digest 改「本周结论 N 条（高优先级 X 条待拍板）」；PUT period 空串 400；MetricPoint 注释更正；备注输入 key 重挂载（回滚刷新）；tasks.md 勾选。
-- 新增回归：期次窗口两例、指标口径例、digest 措辞。
-- VERIFY：npm run verify exit 0 — 119/119（13 files）。→ REVIEW cycle 3（终审）。
+- 真机实测记录无法复核（脚本与记录逻辑自洽，失败一跑被诚实记录）。
+- 卡片转发后按钮回调真实行为（MINOR-1 前提）未实测。
+- tasks 8 真实周报走查用 sample 期次代替（与 flow 状态一致）。
 
+## verify 复跑
 
----
-
-# REVIEW Findings — M3（cycle 3）
-
-**VERDICT: FAIL** — cycle 1/2 修复全部实测通过、数字自洽成立；但发现 cycle-1 崩溃类残余路径：
-
-- [BLOCKER] server/index.ts:48 `new URL()` 在 guard 之前同步执行——`GET //`（及 `http://[` 等）→ TypeError → 进程 exit 1（原始 socket 实测 4 种目标全部击杀；对照组正常）。
-- [MINOR] 演示回退期点行动落 `period:''` 记录 → `record.period !== report.period` 恒真 → 永久混入对照块。
-- [NIT] dashboard/engine 同名 totalOf 两种签名；actions 写非原子；GRILL 决议 6 措辞偏差（alert vs 行内，功能等价记录）；前端推送按钮维持后续候选。
-
-## 修复记录（cycle 3 → cycle 4）
-
-- BLOCKER：`new URL` 包 try/catch → 400（原始 socket 回归测试：GET // → 400 且 health 存活）。
-- MINOR：review 侧过滤空 period + 前端 `setAction(…, persist)` 开关（演示期仅本地乐观更新不落库，两测钉住）。
-- NIT：dashboard totalOf→sumCurrentOf（消同名异签）；actions 原子写（tmp+rename）；措辞/按钮记录不改。
-- VERIFY：npm run verify exit 0 — 122/122（13 files）。→ REVIEW cycle 4（终审，最后额度）。
-
+exit 0；tsc 干净；vitest 16 文件/148 全过（2.26s）；vite build OK（618 modules）。与派发口径一致，无不符。
 
 ---
 
-# REVIEW Findings — M3（cycle 4，终审）
+# M4 REVIEW cycle 2（2026-09-27，fresh code-reviewer 子代理）
 
-**VERDICT: PASS（APPROVE_WITH_COMMENTS）** — 前三轮修复全部独立实测成立（原始 socket GET //→400 存活、真实 webhook 三语义、空 period 过滤、数字自洽独立复算吻合）；verify 复现（122/122）。无阻断。
+## VERDICT: PASS
 
-## CONVERGE（cycle 4）
+cycle 1 修复逐条判定：MAJOR-1 已修复（独立枚举 sendNotification 全部生产调用点，不存在 IM 在场时只发 webhook 文本并落状态的路径；回归测试断言兜底/手动重推走 IM 通道、webhook 0 次、卡片≥1）；MINOR-1 已修复（openId 比对 fail-closed，未解析 ou_ 前缀时明确提示；伪造面在身份校验之后且不信任卡片自带 period）；MINOR-2 已修复（executionKeepsDecision 仅 executed 无 decided* 且已有留痕时保留；accept→reject 被「已处理」门挡住，PC executed→卡片 accept 提示已执行不落库）；MINOR-3 已修复（handler try/catch，「目录当 actionsFile」注入真实 rename 失败，断言不冒泡+失败回执）；NIT-2 已修复；NIT-3 按约定不修。
 
-无阻断 → SHIP。7 项 minor/nit 记录为后续打磨：
-1. 对照块"往期"过滤而非"最近 1-2 期"窗口——数月后无界累积（建议 period 降序+截断）。
-2. HTTP 路径静默丢弃非法 executedNote/text/dimension（纯函数校验在 HTTP 不可达，应直传得 400）。
-3. writeNotifyState 非原子写（对称性）。
-4. digest 结论列表未显式 severity 排序（当前依赖引擎输出顺序）。
-5. POST /api/notify/push 可被浏览器跨站触发（CSRF，127.0.0.1+无鉴权边界已文档化，影响=多发摘要）。
-6. validMonthDay 不查月份长度（2026-02-31 接受，仅排序键无后果）。
-7. useActionStore 回滚 refetch 与后续点击的小竞态（数据无损，GRILL 决议 6 范围）。
+全量复查（75554a00 固定点，21 修改 + 10 新文件）：无新 BLOCKER/MAJOR。SDK 契约独立核对无假证据；lockfile 新增 50 包均为 lark SDK 传递依赖；`git ls-files data/` 确认 im.json 凭证未入库；GRILL 决议 1-10 与 proposal §8 逐条比对无偏差。
+
+## 非阻塞建议（记录为后续候选，README 已列入）
+
+- SUGGEST-1：桥接启动失败后永久静默降级且该期卡片不自动补发（PRD 定义了降级，但永久性+不可见性超规格意图）——建议周期重试建桥或健康暴露降级状态。
+- SUGGEST-2：非审批人点击会把卡片替换为无按钮结果态，审批人失去该卡入口——建议拒绝回执改为新发提示消息不替换原卡。
+- NIT-1 残留（README:78「60 秒内」）已补修为「约 1 分钟」。
+
+## UNVERIFIED
+
+真机链路（卡片样式/重连/停机提示）依赖 walkthrough 记录，逻辑自洽；tasks 8 用 sample 期次代替真实周报（与 flow 状态一致，诚实记录）。
+
+## verify 复跑
+
+exit 0；tsc 干净；vitest 16 文件/152 全过（2.14s）；vite build OK（618 modules）。与派发口径完全一致。

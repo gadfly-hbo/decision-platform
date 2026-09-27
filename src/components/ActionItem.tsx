@@ -1,4 +1,5 @@
 import type { ActionStatus, SuggestedAction } from '../data'
+import type { StoredActionState } from '../useActionStore'
 import { STATUS_OPTIONS } from './statusLabels'
 
 interface ActionItemProps {
@@ -6,10 +7,19 @@ interface ActionItemProps {
   status: ActionStatus
   /** 已执行时的落地说明（来自后端行动存储） */
   note?: string
+  /** 后端行动记录（M4：读取审批留痕 decidedBy/decidedAt/decidedVia） */
+  decided?: StoredActionState
   onAction: (patch: { status: ActionStatus; executedNote?: string }) => void
 }
 
-export function ActionItem({ action, status, note, onAction }: ActionItemProps) {
+function decidedMetaText(d: StoredActionState): string {
+  const who = d.decidedBy ?? (d.decidedVia === 'card' ? 'IM 审批' : 'PC')
+  const t = new Date(d.decidedAt ?? '')
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${who} · ${pad(t.getMonth() + 1)}-${pad(t.getDate())} ${pad(t.getHours())}:${pad(t.getMinutes())}`
+}
+
+export function ActionItem({ action, status, note, decided, onAction }: ActionItemProps) {
   return (
     <div className="action-item">
       <div className="action-main">
@@ -39,6 +49,7 @@ export function ActionItem({ action, status, note, onAction }: ActionItemProps) 
             {option.label}
           </button>
         ))}
+        {decided?.decidedAt && <span className="decided-meta">{decidedMetaText(decided)}</span>}
       </div>
     </div>
   )

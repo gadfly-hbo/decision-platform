@@ -8,12 +8,15 @@
     "dev:front": "vite",
     "dev:all": "bash scripts/dev-all.sh",
     "server": "tsx server/index.ts",
+    "server:prod": "HOST=0.0.0.0 PORT=9642 tsx server/index.ts",
+    "prod": "npm run build && npm run server:prod",
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "verify": "tsc --noEmit && vitest run && vite build"
   },
   "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.74.0",
     "echarts": "^6.1.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"

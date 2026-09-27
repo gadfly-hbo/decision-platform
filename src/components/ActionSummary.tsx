@@ -71,6 +71,7 @@ export function ActionSummary({ conclusions, actionState, onActionAction, action
             action={action}
             status={statusOf(action.id)}
             note={actionState[action.id]?.executedNote}
+            decided={actionState[action.id]}
             onAction={(patch) => onActionAction(action.id, patch)}
           />
         ))

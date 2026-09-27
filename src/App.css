@@ -251,6 +251,14 @@
   font-size: var(--fs-meta);
 }
 
+/* M4：审批留痕（审批人 · MM-DD HH:mm） */
+.decided-meta {
+  color: var(--text-3);
+  font-size: var(--fs-meta);
+  white-space: nowrap;
+  align-self: center;
+}
+
 .action-status {
   display: inline-flex;
   gap: var(--sp-xs);

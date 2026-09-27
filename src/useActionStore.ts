@@ -3,6 +3,10 @@ import { useCallback, useEffect, useState } from 'react'
 export interface StoredActionState {
   status: 'pending' | 'accepted' | 'rejected' | 'executed'
   executedNote?: string
+  /** 审批留痕（M4）：卡片审批带审批人；PC 操作 decidedBy 留空 */
+  decidedBy?: string
+  decidedAt?: string
+  decidedVia?: 'card' | 'pc'
 }
 
 export type StoredActionMap = Record<string, StoredActionState>
@@ -52,6 +56,9 @@ export function useActionStore(): {
           : prev[actionId]?.executedNote !== undefined
             ? { executedNote: prev[actionId].executedNote }
             : {}),
+        ...(prev[actionId]?.decidedAt !== undefined
+          ? { decidedAt: prev[actionId].decidedAt, ...(prev[actionId].decidedBy !== undefined ? { decidedBy: prev[actionId].decidedBy } : {}), ...(prev[actionId].decidedVia !== undefined ? { decidedVia: prev[actionId].decidedVia } : {}) }
+          : {}),
       },
     }))
     if (!persist) return // 演示回退（无期次）：仅本地态，不落库（REVIEW cycle 3）
@@ -62,7 +69,15 @@ export function useActionStore(): {
     })
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        // 服务器记录回填（M4：留痕字段 decidedBy/decidedAt/decidedVia 以服务端为准）
+        return res.json() as Promise<StoredActionState>
+      })
+      .then((record) => {
         setError(false)
+        // 服务器记录回填（M4：留痕字段以服务端为准）；响应异常（无合法 status）不动本地态
+        if (record && typeof record === 'object' && typeof (record as StoredActionState).status === 'string') {
+          setStore((prev) => ({ ...prev, [actionId]: record }))
+        }
       })
       .catch(() => {
         setError(true)

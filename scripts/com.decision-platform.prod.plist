@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 决策看板生产常驻（M4a）：安装方式见 README「内网单实例部署」
+     cp scripts/com.decision-platform.prod.plist ~/Library/LaunchAgents/
+     launchctl load ~/Library/LaunchAgents/com.decision-platform.prod.plist
+     卸载：launchctl unload ~/Library/LaunchAgents/com.decision-platform.prod.plist
+     注意：换机器部署时改下方 WorkingDirectory/日志路径。 -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.decision-platform.prod</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>cd /Users/bendandebaba/DevWorkSpace/Projects/decision-platform &amp;&amp; npm run prod &gt;&gt; data/prod.log 2&gt;&amp;1</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+</dict>
+</plist>

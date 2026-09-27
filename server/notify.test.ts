@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { vi } from 'vitest'
@@ -9,6 +9,9 @@ import {
   buildWeeklyDigest,
   buildNotifyPayload,
   maybePushNewPeriod,
+  latestPeriodInDir,
+  scanAndPush,
+  startPushScheduler,
 } from './notify'
 import type { DashboardData } from '../src/data/types'
 
@@ -91,4 +94,130 @@ test('writeNotifyState 可写回', () => {
   const f = join(dir, 'state3.json')
   writeNotifyState(f, { lastPushedPeriod: '2026-10-03' })
   expect(readNotifyState(f).lastPushedPeriod).toBe('2026-10-03')
+})
+
+/* ---- M4a：定时扫描推送（红队 KA1：推送不依赖打开看板）---- */
+
+test('latestPeriodInDir：取目录最新 CSV 期次；空目录/目录缺失 → null', () => {
+  const d = mkdtempSync(join(tmpdir(), 'dp-scan-'))
+  try {
+    expect(latestPeriodInDir(d)).toBeNull()
+    expect(latestPeriodInDir(join(d, 'no-such-dir'))).toBeNull()
+    cpSync(join(__dirname, 'report/testdata', 'sample.csv'), join(d, '会员周报-2026-09-19.csv'))
+    expect(latestPeriodInDir(d)).toBe('2026-09-19')
+    cpSync(join(__dirname, 'report/testdata', 'sample.csv'), join(d, '会员周报4213-20260926.csv'))
+    expect(latestPeriodInDir(d)).toBe('2026-09-26')
+  } finally {
+    rmSync(d, { recursive: true, force: true })
+  }
+})
+
+test('scanAndPush：新期次无需打开看板即推送（幂等）；未配置跳过；空目录不推', async () => {
+  const d = mkdtempSync(join(tmpdir(), 'dp-scanpush-'))
+  try {
+    cpSync(join(__dirname, 'report/testdata', 'sample.csv'), join(d, '会员周报-2026-09-26.csv'))
+    const notifyFile = join(dir, 'scan-notify.json')
+    writeFileSync(notifyFile, JSON.stringify({ platform: 'feishu', url: 'https://hook.example/s' }), 'utf-8')
+    const stateFile = join(dir, 'scan-state.json')
+    const actionsFile = join(dir, 'scan-actions.json')
+    const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => ({ ok: true } as Response))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const noCfg = await scanAndPush({ dataDir: d, actionsFile, notifyFile: join(dir, 'missing.json'), notifyStateFile: stateFile })
+    expect(noCfg).toEqual({ pushed: false, reason: 'not-configured' })
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    const first = await scanAndPush({ dataDir: d, actionsFile, notifyFile, notifyStateFile: stateFile })
+    expect(first.pushed).toBe(true)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const body = (fetchMock.mock.calls[0][1] as RequestInit).body as string
+    expect(body).toContain('2026-09-26')
+    expect(body).toContain('背离')
+    expect(readNotifyState(stateFile).lastPushedPeriod).toBe('2026-09-26')
+
+    const again = await scanAndPush({ dataDir: d, actionsFile, notifyFile, notifyStateFile: stateFile })
+    expect(again.pushed).toBe(false)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    const empty = mkdtempSync(join(tmpdir(), 'dp-scanempty-'))
+    try {
+      const noPeriod = await scanAndPush({ dataDir: empty, actionsFile, notifyFile, notifyStateFile: stateFile })
+      expect(noPeriod.pushed).toBe(false)
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    } finally {
+      rmSync(empty, { recursive: true, force: true })
+    }
+  } finally {
+    rmSync(d, { recursive: true, force: true })
+  }
+})
+
+test('startPushScheduler：启动先扫一次、按间隔重复、异常不中断、stop 后不再触发', async () => {
+  vi.useFakeTimers()
+  try {
+    const scan = vi.fn(async () => {
+      if (scan.mock.calls.length === 2) throw new Error('boom')
+    })
+    const stop = startPushScheduler(scan, 60_000, 10)
+    await vi.advanceTimersByTimeAsync(10)
+    expect(scan).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(scan).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(scan).toHaveBeenCalledTimes(3) // 第 2 次 boom 被吞，调度继续
+    stop()
+    await vi.advanceTimersByTimeAsync(180_000)
+    expect(scan).toHaveBeenCalledTimes(3)
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
+/* ---- M4b：IM 通道推送编排（文本+卡片，优先于 webhook）---- */
+
+test('scanAndPush 优先 IM 通道（文本+高优卡片）且不触发 webhook；失败不落状态（整包重试语义）', async () => {
+  const d = mkdtempSync(join(tmpdir(), 'dp-scanim-'))
+  try {
+    cpSync(join(__dirname, 'report/testdata', 'sample.csv'), join(d, '会员周报-2026-09-26.csv'))
+    const notifyFile = join(dir, 'scanim-notify.json')
+    writeFileSync(notifyFile, JSON.stringify({ platform: 'feishu', url: 'https://hook.example/w' }), 'utf-8')
+    const stateFile = join(dir, 'scanim-state.json')
+    const actionsFile = join(dir, 'scanim-actions.json')
+    const fetchMock = vi.fn(async () => ({ ok: true } as Response))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const sent: Array<{ digest: string; cardCount: number }> = []
+    const okChannel = {
+      sendApproval: vi.fn(async (digest: string, cards: unknown[]) => {
+        sent.push({ digest, cardCount: cards.length })
+      }),
+    }
+    const first = await scanAndPush({ dataDir: d, actionsFile, notifyFile, notifyStateFile: stateFile, imChannel: okChannel })
+    expect(first.pushed).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled() // 有 IM 通道时不走群机器人
+    expect(sent).toHaveLength(1)
+    expect(sent[0].digest).toContain('2026-09-26')
+    expect(sent[0].cardCount).toBeGreaterThanOrEqual(1) // sample.csv 高优结论成卡
+    expect(readNotifyState(stateFile).lastPushedPeriod).toBe('2026-09-26')
+    expect(okChannel.sendApproval).toHaveBeenCalledTimes(1)
+
+    // 幂等：同期次不再推
+    const again = await scanAndPush({ dataDir: d, actionsFile, notifyFile, notifyStateFile: stateFile, imChannel: okChannel })
+    expect(again.pushed).toBe(false)
+    expect(okChannel.sendApproval).toHaveBeenCalledTimes(1)
+
+    // 失败：不上状态（下轮整包重试），异常上抛由调度器记日志
+    const stateFile2 = join(dir, 'scanim-state2.json')
+    const failChannel = {
+      sendApproval: vi.fn(async () => {
+        throw new Error('飞书发送失败')
+      }),
+    }
+    await expect(
+      scanAndPush({ dataDir: d, actionsFile, notifyFile, notifyStateFile: stateFile2, imChannel: failChannel }),
+    ).rejects.toThrow(/飞书发送失败/)
+    expect(readNotifyState(stateFile2).lastPushedPeriod).toBe('')
+  } finally {
+    rmSync(d, { recursive: true, force: true })
+  }
 })

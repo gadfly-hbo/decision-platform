@@ -89,6 +89,7 @@ export function ConclusionCard({
                 action={action}
                 status={actionState[action.id]?.status ?? 'pending'}
                 note={actionState[action.id]?.executedNote}
+                decided={actionState[action.id]}
                 onAction={(patch) => onActionAction(action.id, patch)}
               />
             ))}

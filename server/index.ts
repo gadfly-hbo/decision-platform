@@ -1,5 +1,6 @@
 import { createServer, type Server, type ServerResponse } from 'node:http'
-import { join } from 'node:path'
+import { existsSync, readFileSync, statSync } from 'node:fs'
+import { join, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { buildDashboardData } from './dashboard'
 import { readActionStore, writeActionStore, updateActionRecord, type StoredActionStatus } from './actions'
@@ -7,10 +8,14 @@ import {
   readNotifyConfig,
   readNotifyState,
   writeNotifyState,
-  maybePushNewPeriod,
   buildWeeklyDigest,
   sendNotification,
+  scanAndPush,
+  startPushScheduler,
+  type ImPushChannel,
 } from './notify'
+import { readImConfig, buildApprovalCards } from './im'
+import { startFeishuBridge } from './im-feishu'
 
 /** 默认端口避开兄弟项目：5173/4173/8787/8080/5021/2122/1234 均已占用 */
 export const DEFAULT_PORT = 8642
@@ -18,6 +23,50 @@ export const DEFAULT_PORT = 8642
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' })
   res.end(JSON.stringify(body))
+}
+
+const STATIC_MIME: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.ico': 'image/x-icon',
+  '.json': 'application/json; charset=utf-8',
+  '.map': 'application/json; charset=utf-8',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.txt': 'text/plain; charset=utf-8',
+}
+
+/** dist 静态服务：真实文件直出 + 未知路径 SPA fallback（/api 前缀永不进此函数） */
+function serveStatic(res: ServerResponse, distDir: string, pathname: string): void {
+  if (!existsSync(distDir)) return sendJson(res, 404, { error: 'not found' })
+  let rel = ''
+  try {
+    rel = decodeURIComponent(pathname).replace(/^\/+/, '')
+  } catch {
+    rel = '' // 畸形编码按根路径处理 → fallback
+  }
+  const abs = resolve(distDir, rel)
+  let file: string | null = null
+  if (abs === distDir || abs.startsWith(distDir + sep)) {
+    try {
+      if (statSync(abs).isFile()) file = abs
+    } catch {
+      // 不存在 → fallback
+    }
+  }
+  if (!file) {
+    const index = join(distDir, 'index.html')
+    if (!existsSync(index)) return sendJson(res, 404, { error: 'not found' })
+    file = index
+  }
+  const dot = file.lastIndexOf('.')
+  const ext = dot >= 0 ? file.slice(dot) : ''
+  res.writeHead(200, { 'content-type': STATIC_MIME[ext] ?? 'application/octet-stream' })
+  res.end(readFileSync(file))
 }
 
 export interface ServerOptions {
@@ -29,6 +78,16 @@ export interface ServerOptions {
   notifyFile?: string
   /** 推送幂等状态文件（默认 <项目根>/data/notify-state.json） */
   notifyStateFile?: string
+  /** 前端构建产物目录（默认 <项目根>/dist）；存在时非 API GET 走静态服务 */
+  distDir?: string
+  /** 测试注入：替换定时扫描动作（默认 scanAndPush） */
+  pushScan?: () => Promise<unknown>
+  /** 测试注入：扫描间隔 ms（默认 60000） */
+  pushScanIntervalMs?: number
+  /** 测试注入：启动首扫延迟 ms（默认 2000） */
+  pushScanFirstDelayMs?: number
+  /** M4：IM 推送通道（飞书/钉钉桥接）；缺席时扫描推送回落群机器人 webhook */
+  imChannel?: ImPushChannel
 }
 
 /**
@@ -44,6 +103,7 @@ export function startServer(
   const actionsFile = options.actionsFile ?? join(process.cwd(), 'data', 'actions.json')
   const notifyFile = options.notifyFile ?? join(process.cwd(), 'data', 'notify.json')
   const notifyStateFile = options.notifyStateFile ?? join(process.cwd(), 'data', 'notify-state.json')
+  const distDir = options.distDir ?? join(process.cwd(), 'dist')
   const server = createServer((req, res) => {
     let url: URL
     try {
@@ -66,13 +126,13 @@ export function startServer(
       })
     }
     if (req.method === 'GET' && url.pathname === '/api/dashboard') {
-      return guard(handleDashboard(res, { dataDir, actionsFile, notifyFile, notifyStateFile }))
+      return guard(handleDashboard(res, { dataDir, actionsFile, notifyFile, notifyStateFile, imChannel: options.imChannel }))
     }
     if (req.method === 'POST' && url.pathname === '/api/notify/push') {
-      return guard(handleNotifyPush(res, { dataDir, actionsFile, notifyFile, notifyStateFile }))
+      return guard(handleNotifyPush(res, { dataDir, actionsFile, notifyFile, notifyStateFile, imChannel: options.imChannel }))
     }
     if (req.method === 'POST' && url.pathname === '/api/notify/test') {
-      return guard(handleNotifyTest(res, notifyFile))
+      return guard(handleNotifyTest(res, notifyFile, options.imChannel))
     }
     if (req.method === 'GET' && url.pathname === '/api/actions') {
       return sendJson(res, 200, readActionStore(actionsFile))
@@ -80,8 +140,18 @@ export function startServer(
     if (req.method === 'PUT' && url.pathname.startsWith('/api/actions/')) {
       return guard(handleActionPut(req, res, url, actionsFile))
     }
+    if (req.method === 'GET' && url.pathname !== '/api' && !url.pathname.startsWith('/api/')) {
+      return serveStatic(res, distDir, url.pathname)
+    }
     sendJson(res, 404, { error: 'not found' })
   })
+  // M4a：推送扫描调度（KA1）——新期次不依赖任何人打开看板；server.close 时清理定时器
+  const stopScheduler = startPushScheduler(
+    options.pushScan ?? (() => scanAndPush({ dataDir, actionsFile, notifyFile, notifyStateFile, imChannel: options.imChannel })),
+    options.pushScanIntervalMs ?? 60_000,
+    options.pushScanFirstDelayMs ?? 2_000,
+  )
+  server.on('close', stopScheduler)
   server.listen(port, host)
   return server
 }
@@ -139,11 +209,30 @@ async function handleActionPut(
   sendJson(res, 200, store[actionId])
 }
 
-// 仅在 `npm run server`（tsx 直接执行本文件）时绑定默认端口；测试导入不监听
+// 仅在 `npm run server` / `npm run prod`（tsx 直接执行本文件）时绑定端口并拉起 IM 桥接；测试导入不监听
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const port = Number(process.env.PORT ?? DEFAULT_PORT)
-  startServer(port)
-  console.log(`[decision-platform] backend listening on http://127.0.0.1:${port}`)
+  const host = process.env.HOST ?? '127.0.0.1'
+  const dataDir = join(process.cwd(), 'data', 'raw')
+  const actionsFile = join(process.cwd(), 'data', 'actions.json')
+  // M4：配置了飞书（data/im.json）→ 长连接桥接（零公网入站）；无配置跳过，推送回落群机器人
+  let imChannel: ImPushChannel | undefined
+  let stopBridge: (() => Promise<void>) | undefined
+  const imConf = readImConfig(join(process.cwd(), 'data', 'im.json'))
+  const feishuConf = imConf?.platforms.find((p) => p.platform === 'feishu')
+  if (feishuConf) {
+    try {
+      const bridge = await startFeishuBridge({ config: feishuConf, actionsFile, dataDir })
+      imChannel = bridge
+      stopBridge = () => bridge.stop()
+      console.log('[im:feishu] 长连接桥接已启动（审批卡片就绪）')
+    } catch (error) {
+      console.warn('[im:feishu] 桥接启动失败，推送回落群机器人文本摘要：', (error as Error).message)
+    }
+  }
+  const server = startServer(port, host, { dataDir, actionsFile, imChannel })
+  if (stopBridge) server.on('close', () => void stopBridge!())
+  console.log(`[decision-platform] backend listening on http://${host}:${port}`)
 }
 
 interface ServerPaths {
@@ -151,6 +240,7 @@ interface ServerPaths {
   actionsFile: string
   notifyFile: string
   notifyStateFile: string
+  imChannel?: ImPushChannel
 }
 
 async function handleDashboard(res: ServerResponse, paths: ServerPaths): Promise<void> {
@@ -162,22 +252,24 @@ async function handleDashboard(res: ServerResponse, paths: ServerPaths): Promise
     return sendJson(res, 500, { error: `看板数据构建失败：${(error as Error).message}` })
   }
   const config = readNotifyConfig(paths.notifyFile)
-  if (config && data.period && !data.isDemo) {
-    // 新期次首次推送（幂等）：fire-and-forget，失败只记日志，绝不阻塞看板响应（REVIEW cycle 1）
-    void maybePushNewPeriod({
-      config,
-      stateFile: paths.notifyStateFile,
-      period: data.period,
-      digest: buildWeeklyDigest(data, readActionStore(paths.actionsFile)),
+  if ((config || paths.imChannel) && data.period && !data.isDemo) {
+    // 看板访问兜底：与调度器同一漏斗（scanAndPush 幂等，IM 通道=文本+卡片），
+    // 绝不允许 webhook 文本先落状态把整期审批卡片挡死（REVIEW cycle 1 MAJOR-1）
+    void scanAndPush({
+      dataDir: paths.dataDir,
+      actionsFile: paths.actionsFile,
+      notifyFile: paths.notifyFile,
+      notifyStateFile: paths.notifyStateFile,
+      imChannel: paths.imChannel,
     }).catch((error: unknown) => {
-      console.warn('[notify] 自动推送失败：', (error as Error).message)
+      console.warn('[notify] 看板兜底推送失败：', (error as Error).message)
     })
   }
   const state = readNotifyState(paths.notifyStateFile)
   sendJson(res, 200, {
     ...data,
     notify: {
-      configured: config !== null,
+      configured: config !== null || paths.imChannel !== undefined,
       ...(state.lastPushedPeriod ? { lastPushedPeriod: state.lastPushedPeriod } : {}),
     },
   })
@@ -185,14 +277,19 @@ async function handleDashboard(res: ServerResponse, paths: ServerPaths): Promise
 
 async function handleNotifyPush(res: ServerResponse, paths: ServerPaths): Promise<void> {
   const config = readNotifyConfig(paths.notifyFile)
-  if (!config) return sendJson(res, 400, { error: '未配置推送（data/notify.json）' })
+  const imChannel = paths.imChannel
+  if (!config && !imChannel) return sendJson(res, 400, { error: '未配置推送（data/notify.json 或 data/im.json）' })
   const data = buildDashboardData(paths.dataDir, { actionsFile: paths.actionsFile })
   if (data.isDemo || !data.period) {
     return sendJson(res, 400, { error: '无真实期次数据，无法推送' })
   }
   try {
-    // 手动重推 = 补救语义：即使本期已推过也真正再发一条（REVIEW cycle 1）
-    await sendNotification(config, buildWeeklyDigest(data, readActionStore(paths.actionsFile)))
+    // 手动重推 = 补救语义：即使本期已推过也真正再发一轮（IM 通道=文本+高优卡片）
+    if (imChannel) {
+      await imChannel.sendApproval(buildWeeklyDigest(data, readActionStore(paths.actionsFile)), buildApprovalCards(data))
+    } else {
+      await sendNotification(config!, buildWeeklyDigest(data, readActionStore(paths.actionsFile)))
+    }
     writeNotifyState(paths.notifyStateFile, { lastPushedPeriod: data.period })
     sendJson(res, 200, { pushed: true, period: data.period })
   } catch (error) {
@@ -200,11 +297,12 @@ async function handleNotifyPush(res: ServerResponse, paths: ServerPaths): Promis
   }
 }
 
-async function handleNotifyTest(res: ServerResponse, notifyFile: string): Promise<void> {
+async function handleNotifyTest(res: ServerResponse, notifyFile: string, imChannel?: ImPushChannel): Promise<void> {
   const config = readNotifyConfig(notifyFile)
-  if (!config) return sendJson(res, 400, { error: '未配置推送（data/notify.json）' })
+  if (!config && !imChannel) return sendJson(res, 400, { error: '未配置推送（data/notify.json 或 data/im.json）' })
   try {
-    await sendNotification(config, '【决策看板】测试推送：配置生效。')
+    if (imChannel) await imChannel.sendApproval('【决策看板】测试推送：配置生效。', [])
+    else await sendNotification(config!, '【决策看板】测试推送：配置生效。')
     sendJson(res, 200, { sent: true })
   } catch (error) {
     sendJson(res, 502, { error: `测试推送失败：${(error as Error).message}` })

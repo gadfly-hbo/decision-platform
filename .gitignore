@@ -5,4 +5,7 @@ dist/
 data/notify.json
 data/notify-state.json
 data/actions.json
+# M4 IM 自建应用凭证（appId/appSecret/审批人映射，不入库）
+data/im.json
+data/prod.log
 .DS_Store

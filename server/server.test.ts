@@ -113,6 +113,24 @@ test('PUT /api/actions 非法 status → 400', async () => {
   })
 })
 
+test('PUT /api/actions 伪造 decidedBy/decidedVia 被忽略（无鉴权端点防伪留痕，GRILL 决议 2）', async () => {
+  const actionsFile = join(tmpdir(), `dp-actions-trace-${Date.now()}.json`)
+  rmSync(actionsFile, { force: true })
+  await withServer(emptyDir, async (base) => {
+    const put = await fetch(`${base}/api/actions/${encodeURIComponent('c-divergence')}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ status: 'accepted', decidedBy: '伪造者', decidedVia: 'card', period: '2026-09-26' }),
+    })
+    expect(put.status).toBe(200)
+    const record = (await put.json()) as { decidedBy?: string; decidedVia?: string; decidedAt?: string }
+    expect(record.decidedBy).toBeUndefined()
+    expect(record.decidedVia).toBe('pc')
+    expect(record.decidedAt).toBeTruthy()
+  }, { actionsFile })
+  rmSync(actionsFile, { recursive: true, force: true })
+})
+
 /* ---- M3：推送端点与 notify 状态 ---- */
 
 test('GET /api/dashboard 响应含 notify 状态（未配置）', async () => {
@@ -225,4 +243,142 @@ test('畸形 request-target（GET //）→ 400 且进程存活（cycle 3 BLOCKER
     const health = await fetch(`${base}/api/health`)
     expect(health.status).toBe(200)
   })
+})
+
+/* ---- M4a：静态文件服务（dist 生产模式）---- */
+
+function makeDist(): string {
+  const dist = mkdtempSync(join(tmpdir(), 'dp-dist-'))
+  mkdirSync(join(dist, 'assets'), { recursive: true })
+  writeFileSync(join(dist, 'index.html'), '<!doctype html><title>决策看板</title>', 'utf-8')
+  writeFileSync(join(dist, 'assets', 'app.js'), 'console.log(1)', 'utf-8')
+  return dist
+}
+
+test('GET / 服务 index.html；未知路由 SPA fallback；静态资源按类型直出；/api 优先', async () => {
+  const dist = makeDist()
+  await withServer(emptyDir, async (base) => {
+    const root = await fetch(`${base}/`)
+    expect(root.status).toBe(200)
+    expect(root.headers.get('content-type')).toContain('text/html')
+    expect(await root.text()).toContain('决策看板')
+
+    const spa = await fetch(`${base}/some/deep/route`)
+    expect(spa.status).toBe(200)
+    expect(spa.headers.get('content-type')).toContain('text/html')
+    expect(await spa.text()).toContain('决策看板')
+
+    const asset = await fetch(`${base}/assets/app.js`)
+    expect(asset.status).toBe(200)
+    expect(asset.headers.get('content-type')).toContain('javascript')
+    expect(await asset.text()).toBe('console.log(1)')
+
+    // API 路由优先于静态服务：/api/nope 仍 404 JSON（不 fallback）
+    const nope = await fetch(`${base}/api/nope`)
+    expect(nope.status).toBe(404)
+    expect(await nope.json()).toEqual({ error: 'not found' })
+  }, { distDir: dist })
+  rmSync(dist, { recursive: true, force: true })
+})
+
+test('dist 目录不存在 → 非 API GET 404，行为与现状一致', async () => {
+  const missing = join(tmpdir(), `dp-no-dist-${Date.now()}`)
+  await withServer(emptyDir, async (base) => {
+    const res = await fetch(`${base}/`)
+    expect(res.status).toBe(404)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toBe('not found')
+  }, { distDir: missing })
+})
+
+test('路径穿越尝试不出 dist（回退 index.html，不泄漏源码）', async () => {
+  const dist = mkdtempSync(join(tmpdir(), 'dp-dist-sec-'))
+  writeFileSync(join(dist, 'index.html'), '<html>ok</html>', 'utf-8')
+  await withServer(emptyDir, async (base) => {
+    const res = await fetch(`${base}/%2e%2e/server/index.ts`)
+    expect(res.status).toBe(200)
+    const body = await res.text()
+    expect(body).toContain('<html>ok</html>')
+    expect(body).not.toContain('startServer')
+  }, { distDir: dist })
+  rmSync(dist, { recursive: true, force: true })
+})
+
+/* ---- M4b：推送通道编排（REVIEW cycle 1 MAJOR-1 回归）---- */
+
+test('GET 看板兜底推送与手动重推均走 IM 通道（文本+卡片），不再让 webhook 文本挡死卡片（GRILL 决议 1）', async () => {
+  const notifyFile = join(tmpdir(), `dp-notify-imfunnel-${Date.now()}.json`)
+  writeFileSync(notifyFile, JSON.stringify({ platform: 'feishu', url: 'https://hook.example/f' }), 'utf-8')
+  const stateFile = `${notifyFile}.state`
+  const actionsFile = join(tmpdir(), `dp-actions-imfunnel-${Date.now()}.json`)
+  const realFetch = globalThis.fetch.bind(globalThis)
+  const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+    if (String(url).startsWith('http://127.0.0.1')) return realFetch(url as string, init)
+    return { ok: true } as Response
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  try {
+    const sent: Array<{ digest: string; cards: unknown[] }> = []
+    const imChannel = {
+      sendApproval: vi.fn(async (digest: string, cards: unknown[]) => {
+        sent.push({ digest, cards })
+      }),
+    }
+    await withServer(FIXTURE_DIR, async (base) => {
+      // 兜底路径：导入后立刻打开看板（定时器禁用，隔离兜底行为）
+      const dash = await fetch(`${base}/api/dashboard`)
+      expect(dash.status).toBe(200)
+      expect(sent).toHaveLength(1)
+      expect(sent[0].digest).toContain('背离')
+      expect(sent[0].cards.length).toBeGreaterThanOrEqual(1)
+      expect(fetchMock.mock.calls.filter(([u]) => String(u).startsWith('https://'))).toHaveLength(0) // webhook 不挡道
+      // 幂等：再开看板不重推
+      await fetch(`${base}/api/dashboard`)
+      expect(sent).toHaveLength(1)
+
+      // 手动重推 = 补救语义：IM 通道真发一次（文本+卡片），不是只发文本
+      const push = await fetch(`${base}/api/notify/push`, { method: 'POST' })
+      expect(push.status).toBe(200)
+      expect(sent).toHaveLength(2)
+      expect(sent[1].cards.length).toBeGreaterThanOrEqual(1)
+      expect(fetchMock.mock.calls.filter(([u]) => String(u).startsWith('https://'))).toHaveLength(0)
+    }, {
+      dataDir: FIXTURE_DIR,
+      actionsFile,
+      notifyFile,
+      notifyStateFile: stateFile,
+      imChannel,
+      pushScan: async () => ({ pushed: false }), // 禁用调度器，隔离兜底路径
+    })
+  } finally {
+    vi.unstubAllGlobals()
+    rmSync(notifyFile, { force: true })
+    rmSync(stateFile, { force: true })
+    rmSync(actionsFile, { force: true })
+  }
+})
+
+/* ---- M4a：推送扫描调度（KA1）---- */
+
+test('服务启动即挂推送扫描，server.close 后定时器清理不泄漏', async () => {
+  vi.useFakeTimers()
+  try {
+    const scan = vi.fn(async () => {})
+    const server: Server = startServer(0, '127.0.0.1', {
+      dataDir: emptyDir,
+      pushScan: scan,
+      pushScanIntervalMs: 1_000,
+      pushScanFirstDelayMs: 10,
+    })
+    await new Promise<void>((resolve) => server.once('listening', resolve))
+    await vi.advanceTimersByTimeAsync(10)
+    expect(scan).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(scan).toHaveBeenCalledTimes(2)
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(scan).toHaveBeenCalledTimes(2)
+  } finally {
+    vi.useRealTimers()
+  }
 })
