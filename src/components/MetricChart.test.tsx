@@ -21,6 +21,12 @@ test('图表配置：止损线进入 markLine，带标签', () => {
   expect(markLine[0].label.formatter).toBe('止损线 1.0')
 })
 
+test('图表配色：主线 navy、基线 warn 虚线（与 Xanthil token 同值）', () => {
+  const option = buildMetricOption(def, series)
+  expect(option.series[0].lineStyle.color).toBe('#263442')
+  expect(option.series[0].markLine.lineStyle).toEqual({ color: '#855211', type: 'dashed' })
+})
+
 test('图表配置：百分比指标的轴标签做 ×100 换算', () => {
   const cvrDef = demoData.metrics.find((m) => m.id === 'cvr-overall')!
   const cvrSeries = demoData.series.find((s) => s.metricId === 'cvr-overall')!

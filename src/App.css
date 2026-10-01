@@ -34,6 +34,7 @@
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r-base);
+  box-shadow: var(--shadow-card);
 }
 
 .conclusion-head {
@@ -301,6 +302,7 @@
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r-base);
+  box-shadow: var(--shadow-card);
 }
 
 .view-title {
@@ -338,7 +340,7 @@
   padding: var(--sp-lg);
   border: 1px dashed var(--border-strong);
   border-radius: var(--r-sm);
-  background: var(--surface-2);
+  background: var(--soft);
   color: var(--text-3);
   font-size: var(--fs-small);
 }
@@ -429,8 +431,8 @@
 }
 
 .exec-note:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
+  outline: var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .status-btn.st-executed[aria-pressed='true'] {
@@ -445,7 +447,7 @@
   padding: var(--sp-md);
   border: 1px dashed var(--border-strong);
   border-radius: var(--r-sm);
-  background: var(--surface-2);
+  background: var(--soft);
   display: grid;
   gap: var(--sp-sm);
 }

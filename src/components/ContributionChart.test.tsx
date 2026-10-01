@@ -24,7 +24,7 @@ test('贡献图配置：按 |贡献| 降序、最大者在顶部（类目倒序�
 test('贡献图配置：正负分色（正=ok 绿，负=fail 红，与 Xanthil token 同值）', () => {
   const option = buildContributionOption(rows)
   const colors = option.series[0].data.map((d) => d.itemStyle.color)
-  expect(colors).toEqual(['#b91c1c', '#b91c1c', '#166534', '#166534'])
+  expect(colors).toEqual(['#952f2f', '#952f2f', '#176247', '#176247'])
 })
 
 test('贡献图配置：数值标签预格式化为万元（带符号）', () => {

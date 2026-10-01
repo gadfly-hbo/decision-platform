@@ -9,8 +9,8 @@ import { formatWanDelta } from '../data'
 echarts.use([BarChart, GridComponent, TooltipComponent, CanvasRenderer])
 
 /** 与 tokens.css 的 --ok / --fail 同值（图表 JS 侧无法引用 CSS 变量） */
-const POS_COLOR = '#166534'
-const NEG_COLOR = '#b91c1c'
+const POS_COLOR = '#176247'
+const NEG_COLOR = '#952f2f'
 
 export interface ContributionOption {
   xAxis: { type: 'value' }

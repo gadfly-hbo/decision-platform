@@ -8,13 +8,23 @@ import { formatMetricValue } from '../data'
 
 echarts.use([LineChart, GridComponent, TooltipComponent, MarkLineComponent, CanvasRenderer])
 
+/** 与 tokens.css 的 --navy / --warn 同值（图表 JS 侧无法引用 CSS 变量） */
+const LINE_COLOR = '#263442'
+const BASELINE_COLOR = '#855211'
+
 export interface MetricOption {
   xAxis: { type: 'category'; data: string[] }
   yAxis: { type: 'value'; scale: boolean; axisLabel: { formatter: string } }
   series: Array<{
     type: 'line'
     data: number[]
-    markLine: { symbol: 'none'; data: Array<{ yAxis: number; label: { formatter: string } }> }
+    itemStyle: { color: string }
+    lineStyle: { color: string }
+    markLine: {
+      symbol: 'none'
+      lineStyle: { color: string; type: 'dashed' }
+      data: Array<{ yAxis: number; label: { formatter: string } }>
+    }
   }>
 }
 
@@ -34,8 +44,11 @@ export function buildMetricOption(def: MetricDef, series: MetricSeries): MetricO
       {
         type: 'line',
         data: series.points.map((p) => toChartValue(p.value)),
+        itemStyle: { color: LINE_COLOR },
+        lineStyle: { color: LINE_COLOR },
         markLine: {
           symbol: 'none',
+          lineStyle: { color: BASELINE_COLOR, type: 'dashed' },
           data: series.baselines.map((b) => ({
             yAxis: toChartValue(b.value),
             label: { formatter: b.label },
