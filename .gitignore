@@ -9,3 +9,5 @@ data/actions.json
 data/im.json
 data/prod.log
 .DS_Store
+# Playwright 截图产物（本地视觉核验输出）
+output/
