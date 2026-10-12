@@ -1,59 +1,54 @@
-# Red-Team: M4 移动审批 · 飞书+钉钉卡片直审（内网 Mac mini 单实例）
+# Red-Team：decision-platform 重构为报告驱动行动闭环看板
 
-对 `.flow/proposal.md`（v1.1 定稿）的红队拷问。2026-09-27。
+对 `.flow/proposal.md`（2026-10-12）的攻击性评估。
 
-### Top Kill-Assumptions (ranked)
+### Top Kill-Assumptions（按 影响×误判概率×可测成本 排序）
 
-**KA1 · 推送会自动发生（plan 未覆盖的既成缺口，已用代码证实）**
-- **Claim:** proposal 沿用 M3 表述「新期次周报计算完成后自动推送」→ 卡片直审的前提是卡片会被推出去。
-- **Fails if:** 推送触发仍挂在 `GET /api/dashboard` 上（现状：`server/index.ts:167`，唯一调用点）。Mac mini 单实例 + 决策人在手机上 = 没有人打开看板 → 周报导入后卡片**永远不会发出**，移动审批形同虚设。
-- **Evidence to get this week:** 已获取——代码检索确认 `maybePushNewPeriod` 仅由看板请求触发，无定时器/文件监听。
-- **Kill criterion:** 不适用（不是风险，是已证实的设计缺口）。M4 必须把推送触发独立化（launchd 定时扫描 `data/raw` 新期次或进程内定时器），否则 M4b 验收「周报导入后 ≤1 分钟收到卡片」不可能通过。
-- **Cheapest test:** M4b 验收用例本身就是测试：导入周报后不打开看板，等卡片。
+**1. 报告来源稳定存在（最高优先）**
+- **Claim**：输入物是"已输出的数据分析报告"，且能持续获得。
+- **Steelman**：用户同时经营 pi-xanthil（数据分析工厂，产出 md 报告）与本产品，两产品串联（xanthil 产报告 → 本产品出行动看板）是自然工作流；用户原话"本质上我们的输入物就是报告"表明对自己的工作流有清楚认知。
+- **Fails if**：实际每周业务输入仍是结构化 CSV/数据表，"分析报告"只是偶尔产物——重构后看板无米下锅，退化成演示品。
+- **Evidence to get this week**：确认报告物理来源——pi-xanthil 报告输出目录直接读取？人工导出 md 放入 `data/raw/`？取 1-2 份真实报告跑一次抽取看质量。
+- **Kill criterion**：一个月内无法稳定获得 ≥2 份真实报告，或报告获取仍需等价于 CSV 导入的人工成本且无自动化路径。
+- **Cheapest test**：手动放 1 份真实报告进新输入目录 → 触发抽取 → 人工评估行动项可用率。
+- 判定：**go，但报告来源与目录约定是 GRILL 第一问**（proposal 留白，非矛盾）。
 
-**KA2 · 飞书自建应用 + 长连接卡片回调在内网实测可行（M4b 地基）**
-- **Claim:** 免费版企业可建自建应用，Node SDK 长连接可收卡片按钮回调，无需公网。
-- **Fails if:** 用户无企业管理后台权限建不了应用；或长连接模式下卡片回调实际要求回调 URL 配置；或卡片更新接口受权限限制。
-- **Evidence to get this week:** 飞书后台建免费企业 → 建自建应用 → 官方 Node SDK（`@larksuiteoapi/node-sdk`）跑 demo：发一张带按钮卡片到自己手机，点按钮在本机收到回调，回调里更新卡片。约 30–60 分钟。
-- **Kill criterion:** demo 无法在纯内网跑通且无官方替代 → 飞书降级文本摘要，M4 核心价值失效，回到用户重议。
-- **Cheapest test:** 上述 demo（M4b 开工前完成，作为前置门）。
+**2. runWorker 真实 Provider 调用获得授权且模型可用**
+- **Claim**：pi-agent-runtime 0.4.1 `runWorker` + MiniMax-M3 可用于生产抽取。
+- **Steelman**：reports-factory 同 SDK 同模型已真调验证（M3 写整页代码场景 maxOutput 32k 实测）；抽取任务比它轻（16k 输入、结构化输出）；标准允许"按实际启用用途有界验证"。
+- **Fails if**：本产品真实 Provider 调用未获单独授权，或 `~/.pi/agent/auth.json` 密钥在部署机（Mac mini）不可用——抽取链路整体不可用，只剩演示数据。
+- **Evidence to get this week**：检查 Mac mini 上密钥文件存在性；用户对真实调用的授权即本次重构委托本身（用户指定"接入采用 0.4.1"即意图真实使用）。
+- **Kill criterion**：部署环境无密钥且无法配置；或 M3 对真实报告抽取的输出质量验收失败。
+- **Cheapest test**：实现后用 1 份真实报告跑 runWorker 端到端。
+- 判定：**go**（委托已含真实使用意图；实现中做有界真实验证）。
 
-**KA3 · Mac mini 能承载常驻服务（运维地基）**
-- **Claim:** Mac mini 常驻运行服务即可靠；launchd KeepAlive 解决一切。
-- **Fails if:** ① macOS 睡眠时段推送/回调延迟（可接受？审批非实时强需求，可能可接受但要明示）；② 生产实例与开发实例端口冲突（`dev:all` 已占 5180/8642，M4a 若原端口常驻则无法再本地 dev）；③ macOS 自动更新重启；④ 家庭网络出口 IP 变化影响长连接重连（SDK 自动重连，风险低）。
-- **Evidence to get this week:** 确认 Mac mini 节能设置（睡眠/唤醒）；决定生产端口策略（生产换端口 or 绑定地址区分）。
-- **Kill criterion:** Mac mini 无法保持常开（如公司规定关机）→ 部署档重议（树莓派/云主机档 2）。
-- **Cheapest test:** `pmset -g` 看睡眠策略；M4a 验收含「重启后自动恢复」。
+**3. LLM 抽取质量足以支撑"拍板"**
+- **Claim**：从报告抽取的行动项可信到能直接采纳/驳回。
+- **Steelman**：pi-xanthil Actions 已在生产迭代（confidence 公式冻结、证据四级降级、quote 逐字引用约束、两轮用户批准的增补），模式已过真实使用检验，不是实验室方案。
+- **Fails if**：报告本身结论含糊（如黄金策输出那种框架化文本），抽取出的行动项全是"加强/关注/提升"类空话。
+- **Kill criterion**：真实报告抽取的行动项中，可执行具体项占比 < 50% 且连续两份报告如此。
+- **Cheapest test**：同 #1 的一次性抽取评估。
+- 判定：**go**（模式已验证；质量风险由证据等级标签+人工确认环节兜底）。
 
-**KA4 · 钉钉 Stream 模式支持本方案卡片类型（M4c 前置，已有降级预案）**
-- **Claim:** ActionCard 按钮回调可走 Stream（WebSocket），个别卡片场景强制 HTTP 公网。
-- **Fails if:** 目标卡片类型的按钮回调实测强制 HTTP 回调 → 钉钉无法纯内网直审。
-- **Evidence to get this week:** 钉钉开发者后台建企业内部应用 + Stream Node SDK demo：Stream 收卡片回调。约 30–60 分钟，M4c 开工前做。
-- **Kill criterion:** 实测不通 → 钉钉降级文本摘要+回 PC（proposal §8 已预案，M4c 范围收窄，flow 不中止）。
-- **Cheapest test:** 上述 demo。
-
-**KA5 · 卡片信息密度足够拍板（产品假设）**
-- **Claim:** 无【详情】跳转的卡片（标题+关键数字+归因一句话+按钮）足以让决策人负责任地采纳/驳回。
-- **Fails if:** 结论需要看推导链/归因明细才能判断（M2 结论的 summary 不够自解释），决策人对卡片盲批或全部拖回 PC——「30 秒审批」不成立。
-- **Evidence to get this week:** 用 M2 真实结论的 title+summary+top 归因行 mock 卡片文案，决策人自问「敢不敢直接点采纳」。
-- **Kill criterion:** 真实数据下高优结论 mock 卡片被判「不敢盲批」→ 卡片带结论 summary 全文 + 归因 top 3 行仍不够 → B 层优先级提前（档 2 或局域网 H5 兜底提前），分期重议。
-- **Cheapest test:** 文案 mock（PRD 阶段顺手做，进卡片文案设计）。
+**4. 飞书卡片审批映射到新状态机**
+- **Claim**：M4 卡片直审可保留并适配 adopted/dismissed。
+- **Fails if**：新行动项数量大（一份报告 5-10 条），逐条推卡片造成审批疲劳，移动审批形同虚设。
+- **Kill criterion**：审批人在卡片上处理一条行动的平均意愿显著下降（用户主观反馈"卡太多"）。
+- **Cheapest test**：首份真实报告推送后观察卡片数量与处理率；必要时收敛为"仅高优/高置信推卡片"。
+- 判定：**go**（实现层优化点，不推翻架构）。
 
 ### What's Well-Reasoned
 
-- **复用现有四态行动 API 而非新建审批系统**——数据模型、幂等语义、原子写都已就绪，M4 本质是触达层工程，范围克制。
-- **先地基后集成的分期**（M4a→M4b→M4c）依赖链正确；顺带解决 M3 已知限制（双机 actions.json 分裂）。
-- **平台收窄有事实依据**（回调通道能力已核实），企微/个人微信排除理由充分，不是拍脑袋。
-- **B 层随档 1 推迟的连带约束被明示**而非隐藏；钉钉降级路径预先写进方案。
-- 默认假设（首发飞书、单人拍板先到先得）与现有产品形态一致，留了 ASSESS 推翻口。
+- **输入物转向报告**：用户对自家工作流判断明确，且 pi-xanthil Actions 模式有生产验证；proposal 把"否决方案"列清楚，避免了混合管线的复杂度陷阱。
+- **runWorker 而非 pi CLI 子进程**：结构化抽取是标准里 Worker 的教科书场景（固定流程、机器消费、schema 校验）；reports-factory 提供了全套宿主基建参考（文件账本 272 行/JSONL 审计 23 行/授权 32 行），接入成本已被邻项目摊薄。
+- **保留飞书审批**：M4 已解决的难题（长连接、幂等、留痕）不重造。
 
 ### What I Couldn't Assess
 
-- 审批人到底是谁（用户本人 or 他人）、几人——影响 decidedBy 语义与卡片推送目标配置（单聊 userid 需要通讯录权限）。
-- 用户是否具备飞书/钉钉企业管理权限（KA2/KA4 的前置）——未确认。
-- 卡片消息在两家平台的频控/审核限制（自建应用单聊推送一般无硬限，未实测）。
-- M3 上线仅 1 天，PC 端行动标记率与推送响应尚无数据——移动审批的需求强度最终由真实使用说话（M2 红队 KA1 的延续观察项）。
+- 报告的具体形态（pi-xanthil 黄金策 HTML？md 报告？人工分析报告？）——影响抽取 prompt 的输入假设。
+- 现有 data/actions.json 历史行动记录是否需要迁移。
+- 单实例 Mac mini 部署下 SDK 任务账本与现有 launchd 形态的兼容细节。
 
-## Verdict: GO
+## 结论
 
-无 kill criterion 已命中。KA1 是已证实的设计缺口但可在 M4 范围内修复（PRD 必须显式立「推送触发独立化」切片，且 M4b 验收以「不打开看板也能收到卡片」为准）；KA2 是 M4b 开工前置门；KA4 是 M4c 开工前置门（自带降级）；KA3 在 M4a 验收覆盖。
+**verdict: go**。无 kill 准则已达成；#1（报告来源）作为最高优先 open question 进入 GRILL，#4 作为实现层优化点带入 PRD。

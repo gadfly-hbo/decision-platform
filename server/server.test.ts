@@ -1,9 +1,31 @@
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { vi } from 'vitest'
 import type { Server } from 'node:http'
 import { startServer, type ServerOptions } from './index'
+import type { ExtractionRunner } from './agent/extract'
+import type { ActionItemDraft } from './agent/types'
+
+/** 通知漏斗用假 runner：固定返回 1 条高优数据级行动项 */
+const notifyRunner: ExtractionRunner = {
+  async runExtraction(): Promise<ActionItemDraft[]> {
+    return [
+      {
+        title: '对沉睡会员发放阶梯券',
+        rationale: '复购率下滑',
+        expectedImpact: '复购率 +2pp',
+        priority: 'high',
+        effort: 'medium',
+        confidence: 0.92,
+        evidence: { facts: [{ text: '复购率下滑', quote: '会员复购率由 12% 降至 9%' }], level: '数据支撑', reasoning: 'r' },
+      },
+    ]
+  },
+  async runExtractionRaw() {
+    throw new Error('not used')
+  },
+}
 
 const FIXTURE_DIR = join(tmpdir(), 'dp-server-fixture')
 let emptyDir = ''
@@ -11,7 +33,7 @@ let emptyDir = ''
 beforeAll(() => {
   rmSync(FIXTURE_DIR, { recursive: true, force: true })
   mkdirSync(FIXTURE_DIR, { recursive: true })
-  cpSync(join(__dirname, 'report/testdata', 'sample.csv'), join(FIXTURE_DIR, '会员周报-2026-09-26.csv'))
+  writeFileSync(join(FIXTURE_DIR, '会员周报-2026-09-26.md'), '# 会员周报\n\n会员复购率由 12% 降至 9%。\n', 'utf-8')
   emptyDir = mkdtempSync(join(tmpdir(), 'dp-server-empty-'))
 })
 
@@ -25,7 +47,9 @@ async function withServer<T>(
   fn: (base: string) => Promise<T>,
   extra: ServerOptions = {},
 ): Promise<T> {
-  const server: Server = startServer(0, '127.0.0.1', { dataDir, ...extra })
+  // M5：每个服务器实例独立临时库（默认 dbPath 会跨测试串库）
+  const dbDir = mkdtempSync(join(tmpdir(), 'dp-server-db-'))
+  const server: Server = startServer(0, '127.0.0.1', { dataDir, dbPath: join(dbDir, 'board.db'), ...extra })
   await new Promise<void>((resolve) => server.once('listening', resolve))
   const address = server.address()
   if (address === null || typeof address === 'string') throw new Error('no port')
@@ -33,6 +57,7 @@ async function withServer<T>(
     return await fn(`http://127.0.0.1:${address.port}`)
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()))
+    rmSync(dbDir, { recursive: true, force: true })
   }
 }
 
@@ -46,30 +71,36 @@ test('GET /api/health 返回 ok 与服务名', async () => {
   })
 })
 
-test('GET /api/dashboard 返回真实周报计算结果（注入 fixture 目录）', async () => {
-  await withServer(FIXTURE_DIR, async (base) => {
+test('GET /api/dashboard 返回行动闭环聚合（有报告）', async () => {
+  const reportDir = mkdtempSync(join(tmpdir(), 'dp-server-md-'))
+  writeFileSync(join(reportDir, '周报-0926.md'), '# 报告')
+  await withServer(reportDir, async (base) => {
     const res = await fetch(`${base}/api/dashboard`)
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
       isDemo: boolean
-      period: string
-      conclusions: Array<{ severity: string; title: string }>
+      reports: Array<{ filename: string }>
+      actionItems: unknown[]
+      stats: Record<string, number>
+      modelChain: { available: boolean }
     }
     expect(body.isDemo).toBe(false)
-    expect(body.period).toBe('2026-09-26')
-    expect(body.conclusions[0].severity).toBe('high')
-    expect(body.conclusions[0].title).toContain('背离')
+    expect(body.reports[0].filename).toBe('周报-0926.md')
+    expect(body.actionItems).toEqual([]) // 未抽取
+    expect(body.stats).toMatchObject({ suggested: 0, adopted: 0, dismissed: 0, manual: 0 })
+    expect(typeof body.modelChain.available).toBe('boolean')
   })
+  rmSync(reportDir, { recursive: true, force: true })
 })
 
-test('GET /api/dashboard 无数据时回退演示数据（isDemo=true）', async () => {
+test('GET /api/dashboard 无报告时空态（isDemo=true，前端演示回退依据）', async () => {
   await withServer(emptyDir, async (base) => {
     const res = await fetch(`${base}/api/dashboard`)
     expect(res.status).toBe(200)
-    const body = (await res.json()) as { isDemo: boolean; conclusions: unknown[]; series: unknown[] }
+    const body = (await res.json()) as { isDemo: boolean; reports: unknown[]; actionItems: unknown[] }
     expect(body.isDemo).toBe(true)
-    expect(body.conclusions).toHaveLength(4)
-    expect(body.series.length).toBeGreaterThan(0)
+    expect(body.reports).toEqual([])
+    expect(body.actionItems).toEqual([])
   })
 })
 
@@ -82,55 +113,6 @@ test('未知路径返回 404 JSON', async () => {
   })
 })
 
-test('PUT/GET /api/actions：行动状态持久化与读取（注入 tmp 文件）', async () => {
-  const actionsFile = join(tmpdir(), `dp-actions-api-${Date.now()}.json`)
-  rmSync(actionsFile, { force: true })
-  await withServer(emptyDir, async (base) => {
-    const put = await fetch(`${base}/api/actions/${encodeURIComponent('c-divergence')}`, {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ status: 'executed', executedNote: '预算已调整', period: '2026-09-26' }),
-    })
-    expect(put.status).toBe(200)
-    const record = (await put.json()) as { status: string; executedNote: string }
-    expect(record.status).toBe('executed')
-
-    const got = await fetch(`${base}/api/actions`)
-    const store = (await got.json()) as Record<string, { status: string }>
-    expect(store['c-divergence'].status).toBe('executed')
-  }, { actionsFile })
-  rmSync(actionsFile, { force: true })
-})
-
-test('PUT /api/actions 非法 status → 400', async () => {
-  await withServer(emptyDir, async (base) => {
-    const put = await fetch(`${base}/api/actions/x`, {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ status: 'done' }),
-    })
-    expect(put.status).toBe(400)
-  })
-})
-
-test('PUT /api/actions 伪造 decidedBy/decidedVia 被忽略（无鉴权端点防伪留痕，GRILL 决议 2）', async () => {
-  const actionsFile = join(tmpdir(), `dp-actions-trace-${Date.now()}.json`)
-  rmSync(actionsFile, { force: true })
-  await withServer(emptyDir, async (base) => {
-    const put = await fetch(`${base}/api/actions/${encodeURIComponent('c-divergence')}`, {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ status: 'accepted', decidedBy: '伪造者', decidedVia: 'card', period: '2026-09-26' }),
-    })
-    expect(put.status).toBe(200)
-    const record = (await put.json()) as { decidedBy?: string; decidedVia?: string; decidedAt?: string }
-    expect(record.decidedBy).toBeUndefined()
-    expect(record.decidedVia).toBe('pc')
-    expect(record.decidedAt).toBeTruthy()
-  }, { actionsFile })
-  rmSync(actionsFile, { recursive: true, force: true })
-})
-
 /* ---- M3：推送端点与 notify 状态 ---- */
 
 test('GET /api/dashboard 响应含 notify 状态（未配置）', async () => {
@@ -141,11 +123,13 @@ test('GET /api/dashboard 响应含 notify 状态（未配置）', async () => {
   })
 })
 
-test('POST /api/notify/* 未配置 → 400；测试推送配置后 → 200', async () => {
+test('POST /api/notify/*：未配置 400；抽取完成后手动推送真发一轮并落 slug（webhook 降级四态）', async () => {
   const notifyFile = join(tmpdir(), `dp-notify-${Date.now()}.json`)
   await withServer(emptyDir, async (base) => {
     const noCfg = await fetch(`${base}/api/notify/test`, { method: 'POST' })
     expect(noCfg.status).toBe(400)
+    const noCfgPush = await fetch(`${base}/api/notify/push`, { method: 'POST' })
+    expect(noCfgPush.status).toBe(400)
   }, { notifyFile, notifyStateFile: `${notifyFile}.state` })
 
   writeFileSync(notifyFile, JSON.stringify({ platform: 'feishu', url: 'https://hook.example/t' }), 'utf-8')
@@ -156,27 +140,54 @@ test('POST /api/notify/* 未配置 → 400；测试推送配置后 → 200', asy
     return { ok: true } as Response
   })
   vi.stubGlobal('fetch', fetchMock)
-  await withServer(emptyDir, async (base) => {
+  await withServer(FIXTURE_DIR, async (base) => {
     const test = await fetch(`${base}/api/notify/test`, { method: 'POST' })
     expect(test.status).toBe(200)
     const webhookCalls = () => fetchMock.mock.calls.filter(([u]) => String(u).startsWith('https://'))
     expect(webhookCalls()).toHaveLength(1)
 
-    // 真实数据 + 手动推送：摘要送达，幂等状态落盘，二次推送跳过
+    // 报告未抽取（无 done）→ 手动推送 400
+    const noDone = await fetch(`${base}/api/notify/push`, { method: 'POST' })
+    expect(noDone.status).toBe(400)
+
+    // 四态端点：webhook 已配置但未推送 → imConfigured=false（文本摘要降级呈现依据）、无 lastPushedReport
+    const dash0 = (await (await fetch(`${base}/api/dashboard`)).json()) as { notify: Record<string, unknown> }
+    expect(dash0.notify).toMatchObject({ configured: true, imConfigured: false })
+    expect(dash0.notify.lastPushedReport).toBeUndefined()
+
+    // 抽取完成 → 手动推送：摘要送达（行动闭环计数）+ slug 落状态
+    const extract = await fetch(`${base}/api/reports/extract`, { method: 'POST', body: '{}' })
+    expect(extract.status).toBe(200)
     const push1 = await fetch(`${base}/api/notify/push`, { method: 'POST' })
     expect(push1.status).toBe(200)
-    const body1 = (await push1.json()) as { pushed: boolean }
-    expect(body1.pushed).toBe(true)
+    const body1 = (await push1.json()) as { pushed: boolean; period: string }
+    expect(body1).toEqual({ pushed: true, period: '会员周报-2026-09-26' })
     const [url, init] = fetchMock.mock.calls.at(-1) as unknown as [string, RequestInit]
     expect(url).toBe('https://hook.example/t')
-    expect((init.body as string)).toContain('背离')
+    expect((init.body as string)).toContain('行动闭环周摘要')
     // REVIEW cycle 1：手动重推是"补救"语义——即使已推过也要真正再发一条
     const push2 = await fetch(`${base}/api/notify/push`, { method: 'POST' })
-    const body2 = (await push2.json()) as { pushed: boolean }
-    expect(body2.pushed).toBe(true)
-    // test 推送 1 次 + 手动重推 2 次 = 3 次 webhook
-    expect(webhookCalls()).toHaveLength(3)
-  }, { notifyFile, notifyStateFile: `${notifyFile}.state`, dataDir: FIXTURE_DIR })
+    expect(((await push2.json()) as { pushed: boolean }).pushed).toBe(true)
+    // 指定 slug 定向重推同报告
+    const push3 = await fetch(`${base}/api/notify/push`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ slug: '会员周报-2026-09-26' }),
+    })
+    expect(push3.status).toBe(200)
+    // test 推送 1 次 + 手动重推 3 次 = 4 次 webhook
+    expect(webhookCalls()).toHaveLength(4)
+
+    // 四态端点：推送成功 → lastPushedReport = slug
+    const dash1 = (await (await fetch(`${base}/api/dashboard`)).json()) as { notify: Record<string, unknown> }
+    expect(dash1.notify).toMatchObject({ configured: true, imConfigured: false, lastPushedReport: '会员周报-2026-09-26' })
+  }, {
+    notifyFile,
+    notifyStateFile: `${notifyFile}.state`,
+    dataDir: FIXTURE_DIR,
+    agentRunner: notifyRunner,
+    pushScan: async () => ({ pushed: false }), // 禁用调度漏斗，隔离手动路径
+  })
   vi.unstubAllGlobals()
   rmSync(notifyFile, { force: true })
   rmSync(`${notifyFile}.state`, { force: true })
@@ -184,20 +195,22 @@ test('POST /api/notify/* 未配置 → 400；测试推送配置后 → 200', asy
 
 /* ---- REVIEW cycle 1：路由兜底与推送语义 ---- */
 
-test('畸形行动 id（decodeURIComponent 失败）→ 400 且进程存活', async () => {
+test('畸形行动项 id（decodeURIComponent 失败）→ 400 且进程存活', async () => {
   await withServer(emptyDir, async (base) => {
-    const put = await fetch(`${base}/api/actions/%`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: '{}' })
-    expect(put.status).toBe(400)
+    const patch = await fetch(`${base}/api/actions/%`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: '{}' })
+    expect(patch.status).toBe(400)
     const health = await fetch(`${base}/api/health`)
     expect(health.status).toBe(200)
   })
 })
 
-test('非解析类异常（目录缺失）→ /api/dashboard 500 且 /api/health 存活', async () => {
+test('目录缺失不再 500：报告扫描静默空态（M5 语义），健康检查存活', async () => {
   const badDir = join(tmpdir(), `dp-no-such-dir-${Date.now()}`)
   await withServer(badDir, async (base) => {
     const dash = await fetch(`${base}/api/dashboard`)
-    expect(dash.status).toBe(500)
+    expect(dash.status).toBe(200)
+    const body = (await dash.json()) as { isDemo: boolean }
+    expect(body.isDemo).toBe(true)
     const health = await fetch(`${base}/api/health`)
     expect(health.status).toBe(200)
   })
@@ -306,11 +319,10 @@ test('路径穿越尝试不出 dist（回退 index.html，不泄漏源码）', a
 
 /* ---- M4b：推送通道编排（REVIEW cycle 1 MAJOR-1 回归）---- */
 
-test('GET 看板兜底推送与手动重推均走 IM 通道（文本+卡片），不再让 webhook 文本挡死卡片（GRILL 决议 1）', async () => {
+test('手动重推走 IM 通道（文本+高优卡片，按报告过滤）；webhook 文本不挡道；dashboard 四态含 imConfigured', async () => {
   const notifyFile = join(tmpdir(), `dp-notify-imfunnel-${Date.now()}.json`)
   writeFileSync(notifyFile, JSON.stringify({ platform: 'feishu', url: 'https://hook.example/f' }), 'utf-8')
   const stateFile = `${notifyFile}.state`
-  const actionsFile = join(tmpdir(), `dp-actions-imfunnel-${Date.now()}.json`)
   const realFetch = globalThis.fetch.bind(globalThis)
   const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
     if (String(url).startsWith('http://127.0.0.1')) return realFetch(url as string, init)
@@ -325,36 +337,36 @@ test('GET 看板兜底推送与手动重推均走 IM 通道（文本+卡片）�
       }),
     }
     await withServer(FIXTURE_DIR, async (base) => {
-      // 兜底路径：导入后立刻打开看板（定时器禁用，隔离兜底行为）
-      const dash = await fetch(`${base}/api/dashboard`)
-      expect(dash.status).toBe(200)
-      expect(sent).toHaveLength(1)
-      expect(sent[0].digest).toContain('背离')
-      expect(sent[0].cards.length).toBeGreaterThanOrEqual(1)
-      expect(fetchMock.mock.calls.filter(([u]) => String(u).startsWith('https://'))).toHaveLength(0) // webhook 不挡道
-      // 幂等：再开看板不重推
-      await fetch(`${base}/api/dashboard`)
-      expect(sent).toHaveLength(1)
+      // 四态端点：IM 通道已配置未推送
+      const dash0 = (await (await fetch(`${base}/api/dashboard`)).json()) as { notify: Record<string, unknown> }
+      expect(dash0.notify).toMatchObject({ configured: true, imConfigured: true })
+      expect(dash0.notify.lastPushedReport).toBeUndefined()
 
-      // 手动重推 = 补救语义：IM 通道真发一次（文本+卡片），不是只发文本
+      // 抽取（1 条 high+数据支撑 建议）→ 手动重推：IM 通道真发一轮（文本+该报告的卡片）
+      const extract = await fetch(`${base}/api/reports/extract`, { method: 'POST', body: '{}' })
+      expect(extract.status).toBe(200)
       const push = await fetch(`${base}/api/notify/push`, { method: 'POST' })
       expect(push.status).toBe(200)
-      expect(sent).toHaveLength(2)
-      expect(sent[1].cards.length).toBeGreaterThanOrEqual(1)
-      expect(fetchMock.mock.calls.filter(([u]) => String(u).startsWith('https://'))).toHaveLength(0)
+      expect(((await push.json()) as { period: string }).period).toBe('会员周报-2026-09-26')
+      expect(sent).toHaveLength(1)
+      expect(sent[0].digest).toContain('建议 1')
+      expect(sent[0].cards).toHaveLength(1)
+      expect(fetchMock.mock.calls.filter(([u]) => String(u).startsWith('https://'))).toHaveLength(0) // 不走群机器人
+
+      const dash1 = (await (await fetch(`${base}/api/dashboard`)).json()) as { notify: Record<string, unknown> }
+      expect(dash1.notify).toMatchObject({ configured: true, imConfigured: true, lastPushedReport: '会员周报-2026-09-26' })
     }, {
       dataDir: FIXTURE_DIR,
-      actionsFile,
       notifyFile,
       notifyStateFile: stateFile,
       imChannel,
-      pushScan: async () => ({ pushed: false }), // 禁用调度器，隔离兜底路径
+      agentRunner: notifyRunner,
+      pushScan: async () => ({ pushed: false }), // 禁用调度漏斗，隔离手动路径
     })
   } finally {
     vi.unstubAllGlobals()
-    rmSync(notifyFile, { force: true })
-    rmSync(stateFile, { force: true })
-    rmSync(actionsFile, { force: true })
+    rmSync(notifyFile, { recursive: true, force: true })
+    rmSync(stateFile, { recursive: true, force: true })
   }
 })
 
@@ -381,4 +393,65 @@ test('服务启动即挂推送扫描，server.close 后定时器清理不泄漏'
   } finally {
     vi.useRealTimers()
   }
+})
+
+/* ---- M5 T7：账本/审计投影端点（S-R 运行详情数据源）---- */
+
+test('GET /api/agent/usage：未注入 → available:false；注入假账本 → 快照与路径回显', async () => {
+  await withServer(emptyDir, async (base) => {
+    const res = await fetch(`${base}/api/agent/usage`)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ available: false })
+  })
+  await withServer(emptyDir, async (base) => {
+    const res = await fetch(`${base}/api/agent/usage`)
+    expect(await res.json()).toMatchObject({
+      available: true,
+      totals: { modelCalls: 2, inputTokens: 120, outputTokens: 80, activeMs: 1500, toolCalls: 1, resourceUnits: 3 },
+      ledgerPath: '/tmp/dp-fake-ledger.json',
+      auditPath: '/tmp/dp-fake-audit.jsonl',
+    })
+  }, {
+    agentLedger: {
+      usageTotals: () => ({ modelCalls: 2, inputTokens: 120, outputTokens: 80, activeMs: 1500, toolCalls: 1, resourceUnits: 3 }),
+      usageOf: () => null,
+      ledgerPath: '/tmp/dp-fake-ledger.json',
+    },
+    agentAuditPath: '/tmp/dp-fake-audit.jsonl',
+  })
+})
+
+test('GET /api/agent/events：审计尾部 ≤100 行投影 extract:*（最新在前、失败带原因）；非抽取任务过滤；文件缺失 → 空', async () => {
+  const auditDir = mkdtempSync(join(tmpdir(), 'dp-agent-events-'))
+  const auditPath = join(auditDir, 'agent-audit.jsonl')
+  const lines: string[] = [
+    // 第 1 行的抽取事件被尾部 100 行截断排除
+    JSON.stringify({ version: '1.0', taskId: 'extract:被截断', runId: 'r0', sequence: 0, kind: 'run.started', at: '2026-10-13T01:00:00.000Z', provider: 'p', model: 'm' }),
+  ]
+  for (let i = 0; i < 105; i++) {
+    lines.push(JSON.stringify({ version: '1.0', taskId: `noise:${i}`, runId: 'r', sequence: i, kind: 'model.admitted', at: 't', provider: 'p', model: 'm' }))
+  }
+  lines.push(JSON.stringify({ version: '1.0', taskId: 'extract:报告A', runId: 'r1', sequence: 1, kind: 'run.started', at: '2026-10-13T08:59:30.000Z', provider: 'minimax-cn', model: 'MiniMax-M3' }))
+  lines.push(JSON.stringify({ version: '1.0', taskId: 'extract:报告A', runId: 'r1', sequence: 2, kind: 'run.finished', at: '2026-10-13T08:59:40.000Z', provider: 'minimax-cn', model: 'MiniMax-M3' }))
+  lines.push(JSON.stringify({ version: '1.0', taskId: 'extract:报告B', runId: 'r2', sequence: 3, kind: 'run.finished', at: '2026-10-13T09:00:05.000Z', provider: 'minimax-cn', model: 'MiniMax-M3', reason: 'MODEL_FAILED' }))
+  writeFileSync(auditPath, `${lines.join('\n')}\n`, 'utf-8')
+  try {
+    await withServer(emptyDir, async (base) => {
+      const res = await fetch(`${base}/api/agent/events`)
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as { events: unknown[] }
+      expect(body.events).toEqual([
+        { at: '2026-10-13T09:00:05.000Z', kind: 'failed', reason: 'MODEL_FAILED', model: 'MiniMax-M3', report: '报告B' },
+        { at: '2026-10-13T08:59:40.000Z', kind: 'success', model: 'MiniMax-M3', report: '报告A' },
+        { at: '2026-10-13T08:59:30.000Z', kind: 'start', model: 'MiniMax-M3', report: '报告A' },
+      ]) // 最新在前；noise:* 与被截断的最早抽取行不出现
+    }, { agentAuditPath: auditPath })
+  } finally {
+    rmSync(auditDir, { recursive: true, force: true })
+  }
+
+  await withServer(emptyDir, async (base) => {
+    const res = await fetch(`${base}/api/agent/events`)
+    expect(await res.json()).toEqual({ events: [] }) // 审计文件不存在 → 空
+  }, { agentAuditPath: join(tmpdir(), `dp-no-audit-${Date.now()}.jsonl`) })
 })

@@ -17,7 +17,7 @@
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.74.0",
-    "echarts": "^6.1.0",
+    "pi-agent-runtime": "file:vendor/pi-agent-runtime-0.4.1.tgz",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"
   },

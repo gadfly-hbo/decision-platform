@@ -11,12 +11,16 @@
   --text-2: #6f7480;
   --text-3: #8a8076;
 
-  /* 橘 accent 只标记主操作、选中态与焦点；navy 为次级强调（图表主线） */
+  /* 橘 accent 只标记主操作、选中态与焦点；navy 为次级强调（多源佐证级色标） */
   --accent: #e8643a;
   --accent-strong: #bf4927;
   --accent-soft: #fff1e8;
   --accent-line: #e8c1b4;
   --navy: #263442;
+  --navy-soft: #e8edf2;
+  --navy-line: #c9d4de;
+  /* 驳回弹窗遮罩（G10 唯一弹层） */
+  --scrim: rgba(29, 32, 39, 0.32);
 
   /* 语义色成对出现：深字 + soft 底 + line 描边 */
   --ok: #176247;

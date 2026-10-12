@@ -1,4 +1,4 @@
-import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { vi } from 'vitest'
@@ -6,14 +6,20 @@ import {
   readNotifyConfig,
   readNotifyState,
   writeNotifyState,
+  isSlugPushed,
+  markSlugPushed,
+  latestPushedSlug,
   buildWeeklyDigest,
   buildNotifyPayload,
-  maybePushNewPeriod,
-  latestPeriodInDir,
-  scanAndPush,
+  runPushFunnel,
   startPushScheduler,
+  type ImPushChannel,
 } from './notify'
-import type { DashboardData } from '../src/data/types'
+import { createReportPipeline } from './reports'
+import type { ActionItemDraft } from './agent/types'
+import type { ExtractionRunner } from './agent/extract'
+import type { ApprovalCard } from './im'
+import type { BoardView, ReportRecord } from '../src/data/types'
 
 let dir = ''
 beforeAll(() => {
@@ -22,14 +28,32 @@ beforeAll(() => {
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
 afterEach(() => vi.unstubAllGlobals())
 
-const data = {
-  period: '2026-09-26',
+const now = Date.now()
+const iso = (offsetDays: number) => new Date(now - offsetDays * 24 * 60 * 60 * 1000).toISOString()
+
+function report(over: Partial<ReportRecord>): ReportRecord {
+  return {
+    id: 1,
+    slug: '会员周报-2026-10-10',
+    filename: '会员周报-2026-10-10.md',
+    status: 'done',
+    error: null,
+    importedAt: iso(1),
+    updatedAt: iso(1),
+    ...over,
+  }
+}
+
+const view: BoardView = {
+  title: '决策看板',
+  lede: 'x',
+  reports: [report({ id: 1 }), report({ id: 2, slug: '月度经营复盘', filename: '月度经营复盘.md', status: 'pending', importedAt: iso(30), updatedAt: iso(30) })],
+  actionItems: [],
+  stats: { suggested: 3, adopted: 2, dismissed: 1, manual: 1 },
+  notify: { configured: true },
+  modelChain: { available: true, providers: [] },
   isDemo: false,
-  conclusions: [
-    { id: 'c1', severity: 'high', title: '会员零售额同比 +8.8%，与大盘零售额 -5.9% 背离', actions: [{ id: 'a1' }] },
-    { id: 'c2', severity: 'medium', title: '渠道异动 X', actions: [] },
-  ],
-} as unknown as DashboardData
+}
 
 test('配置读取：缺失/损坏 → null（未配置）', () => {
   expect(readNotifyConfig(join(dir, 'none.json'))).toBeNull()
@@ -41,13 +65,10 @@ test('配置读取：缺失/损坏 → null（未配置）', () => {
   expect(readNotifyConfig(good)).toEqual({ platform: 'feishu', url: 'https://x' })
 })
 
-test('摘要：期次 + 结论标题 + 行动计数，数字与看板同源', () => {
-  const digest = buildWeeklyDigest(data, {})
-  expect(digest).toContain('2026-09-26')
-  expect(digest).toContain('背离')
-  expect(digest).toContain('本周结论 2 条（高优先级 1 条待拍板）')
-  const withStore = buildWeeklyDigest(data, { a1: { status: 'executed', period: 'p', updatedAt: 't' } })
-  expect(withStore).toContain('已执行 1')
+test('摘要：本周报告 N 份（7 天滚动窗）+ 建议/已采纳/已驳回/人工补充计数，与看板统计同源', () => {
+  const digest = buildWeeklyDigest(view)
+  expect(digest).toContain('本周报告 1 份') // 30 天前导入的月复查不计入本周
+  expect(digest).toContain('建议 3 / 已采纳 2 / 已驳回 1 / 人工补充 1')
 })
 
 test('三平台与通用 payload 形状', () => {
@@ -57,98 +78,282 @@ test('三平台与通用 payload 形状', () => {
   expect(buildNotifyPayload('generic', 't')).toEqual({ text: 't' })
 })
 
-test('幂等推送：新期次推一次并落状态；同期次不重推；未配置跳过', async () => {
-  const stateFile = join(dir, 'state.json')
-  const config = { platform: 'feishu' as const, url: 'https://hook.example/x' }
-  const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true } as Response))
-  vi.stubGlobal('fetch', fetchMock)
+/* ---- notify-state：pushedSlugs 集合 + 旧单值兼容 ---- */
 
-  const noCfg = await maybePushNewPeriod({ config: null, stateFile, period: '2026-09-26', digest: 'd' })
-  expect(noCfg).toEqual({ pushed: false, reason: 'not-configured' })
-  expect(fetchMock).not.toHaveBeenCalled()
+test('状态读写：pushedSlugs 集合；旧 lastPushedPeriod 单值并入集合（G8 平移兼容）', () => {
+  const f = join(dir, 'state.json')
+  writeNotifyState(f, { pushedSlugs: ['a'] })
+  expect(readNotifyState(f)).toEqual({ pushedSlugs: ['a'] })
+  expect(isSlugPushed(readNotifyState(f), 'a')).toBe(true)
+  expect(isSlugPushed(readNotifyState(f), 'b')).toBe(false)
 
-  const first = await maybePushNewPeriod({ config, stateFile, period: '2026-09-26', digest: '本周摘要' })
-  expect(first.pushed).toBe(true)
-  expect(fetchMock).toHaveBeenCalledTimes(1)
-  const [url, init] = fetchMock.mock.calls[0]
-  expect(url).toBe('https://hook.example/x')
-  expect((init as RequestInit).body).toContain('本周摘要')
-  expect(readNotifyState(stateFile).lastPushedPeriod).toBe('2026-09-26')
+  const legacy = join(dir, 'state-legacy.json')
+  writeFileSync(legacy, JSON.stringify({ lastPushedPeriod: '旧周报-2026-09-26' }), 'utf-8')
+  expect(readNotifyState(legacy)).toEqual({ pushedSlugs: ['旧周报-2026-09-26'] })
 
-  const again = await maybePushNewPeriod({ config, stateFile, period: '2026-09-26', digest: 'd' })
-  expect(again.pushed).toBe(false)
-  expect(fetchMock).toHaveBeenCalledTimes(1)
+  const mixed = join(dir, 'state-mixed.json')
+  writeFileSync(mixed, JSON.stringify({ pushedSlugs: ['a', 'b'], lastPushedPeriod: 'c' }), 'utf-8')
+  const state = readNotifyState(mixed)
+  expect(isSlugPushed(state, 'c')).toBe(true)
+  expect(latestPushedSlug(state)).toBe('c') // BoardView.lastPushedReport 数据源
+
+  markSlugPushed(mixed, 'd')
+  expect(readNotifyState(mixed).pushedSlugs).toEqual(['a', 'b', 'c', 'd'])
+  markSlugPushed(mixed, 'd') // 幂等：重复标记不重复追加
+  expect(readNotifyState(mixed).pushedSlugs).toEqual(['a', 'b', 'c', 'd'])
 })
 
-test('发送失败：不更新状态并上抛', async () => {
-  const stateFile = join(dir, 'state2.json')
-  const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: false, status: 500 } as Response))
-  vi.stubGlobal('fetch', fetchMock)
-  await expect(
-    maybePushNewPeriod({ config: { platform: 'generic' as const, url: 'https://x' }, stateFile, period: '2026-10-03', digest: 'd' }),
-  ).rejects.toThrow(/500/)
-  expect(readNotifyState(stateFile).lastPushedPeriod).toBe('')
-})
+/* ---- 推送漏斗（假 runner + 假 channel + 临时目录/库）---- */
 
-test('writeNotifyState 可写回', () => {
-  const f = join(dir, 'state3.json')
-  writeNotifyState(f, { lastPushedPeriod: '2026-10-03' })
-  expect(readNotifyState(f).lastPushedPeriod).toBe('2026-10-03')
-})
+const DRAFT_HIGH: ActionItemDraft = {
+  title: '对沉睡会员发放阶梯券',
+  rationale: '复购率下滑',
+  expectedImpact: '复购率 +2pp',
+  priority: 'high',
+  effort: 'medium',
+  confidence: 0.92,
+  evidence: { facts: [{ text: '复购率下滑', quote: '会员复购率由 12% 降至 9%' }], level: '数据支撑', reasoning: 'r' },
+}
 
-/* ---- M4a：定时扫描推送（红队 KA1：推送不依赖打开看板）---- */
+const DRAFT_LOW: ActionItemDraft = {
+  title: '更新门店物料',
+  rationale: '门店物料陈旧',
+  expectedImpact: '形象提升',
+  priority: 'low',
+  effort: 'low',
+  confidence: 0.3,
+  evidence: { facts: [], level: '经验假设', reasoning: 'r' },
+}
 
-test('latestPeriodInDir：取目录最新 CSV 期次；空目录/目录缺失 → null', () => {
-  const d = mkdtempSync(join(tmpdir(), 'dp-scan-'))
+interface FunnelFixture {
+  dataDir: string
+  stateFile: string
+  notifyFile: string
+  dbPath: string
+  close(): void
+}
+
+/** 独立临时工作区：raw/ + board.db + notify 配置与状态（用例间完全隔离） */
+function makeFixture(configured = true): FunnelFixture {
+  const work = mkdtempSync(join(tmpdir(), 'dp-funnel-'))
+  const dataDir = join(work, 'raw')
+  mkdirSync(dataDir, { recursive: true })
+  const stateFile = join(work, 'notify-state.json')
+  const notifyFile = join(work, 'notify.json')
+  if (configured) {
+    writeFileSync(notifyFile, JSON.stringify({ platform: 'feishu', url: 'https://hook.example/f' }), 'utf-8')
+  }
+  return { dataDir, stateFile, notifyFile, dbPath: join(work, 'board.db'), close: () => rmSync(work, { recursive: true, force: true }) }
+}
+
+function fakeRunner(drafts: ActionItemDraft[] = [DRAFT_HIGH]): ExtractionRunner & { inputs: unknown[][] } {
+  const inputs: unknown[][] = []
+  return {
+    inputs,
+    async runExtraction(input) {
+      inputs.push([input])
+      return drafts
+    },
+    async runExtractionRaw() {
+      throw new Error('not used')
+    },
+  }
+}
+
+function fakeChannel(): ImPushChannel & { rounds: Array<{ digest: string; cards: ApprovalCard[] }> } {
+  const rounds: Array<{ digest: string; cards: ApprovalCard[] }> = []
+  return {
+    rounds,
+    async sendApproval(digest, cards) {
+      rounds.push({ digest, cards })
+    },
+  }
+}
+
+test('漏斗：新报告自动抽取 + 推送一轮（文本+高优卡片）；同 slug 幂等不重推', async () => {
+  const fx = makeFixture()
   try {
-    expect(latestPeriodInDir(d)).toBeNull()
-    expect(latestPeriodInDir(join(d, 'no-such-dir'))).toBeNull()
-    cpSync(join(__dirname, 'report/testdata', 'sample.csv'), join(d, '会员周报-2026-09-19.csv'))
-    expect(latestPeriodInDir(d)).toBe('2026-09-19')
-    cpSync(join(__dirname, 'report/testdata', 'sample.csv'), join(d, '会员周报4213-20260926.csv'))
-    expect(latestPeriodInDir(d)).toBe('2026-09-26')
+    writeFileSync(join(fx.dataDir, 'r1.md'), '# 报告一\n会员复购率由 12% 降至 9%。')
+    const pipeline = createReportPipeline(fx.dataDir, fx.dbPath)
+    const runner = fakeRunner()
+    const channel = fakeChannel()
+
+    const first = await runPushFunnel({ pipeline, agentRunner: runner, notifyFile: fx.notifyFile, notifyStateFile: fx.stateFile, imChannel: channel })
+    expect(first.extracted).toMatchObject([{ slug: 'r1', status: 'done', inserted: 1 }])
+    expect(first.pushedSlugs).toEqual(['r1'])
+    expect(channel.rounds).toHaveLength(1)
+    expect(channel.rounds[0].digest).toContain('建议 1')
+    expect(channel.rounds[0].cards).toHaveLength(1) // high 建议成卡
+    expect(channel.rounds[0].cards[0]).toMatchObject({ itemId: expect.any(String), title: '对沉睡会员发放阶梯券' })
+    expect(isSlugPushed(readNotifyState(fx.stateFile), 'r1')).toBe(true)
+
+    // 第二轮：无新报告、r1 已推 → 零动作（幂等）
+    const again = await runPushFunnel({ pipeline, agentRunner: runner, notifyFile: fx.notifyFile, notifyStateFile: fx.stateFile, imChannel: channel })
+    expect(again.extracted).toEqual([])
+    expect(again.pushedSlugs).toEqual([])
+    expect(channel.rounds).toHaveLength(1)
+    pipeline.close()
   } finally {
-    rmSync(d, { recursive: true, force: true })
+    fx.close()
   }
 })
 
-test('scanAndPush：新期次无需打开看板即推送（幂等）；未配置跳过；空目录不推', async () => {
-  const d = mkdtempSync(join(tmpdir(), 'dp-scanpush-'))
+test('漏斗：抽取失败不推送（failed 保留可重试）；恢复后下轮抽取并推送', async () => {
+  const fx = makeFixture()
   try {
-    cpSync(join(__dirname, 'report/testdata', 'sample.csv'), join(d, '会员周报-2026-09-26.csv'))
-    const notifyFile = join(dir, 'scan-notify.json')
-    writeFileSync(notifyFile, JSON.stringify({ platform: 'feishu', url: 'https://hook.example/s' }), 'utf-8')
-    const stateFile = join(dir, 'scan-state.json')
-    const actionsFile = join(dir, 'scan-actions.json')
+    writeFileSync(join(fx.dataDir, 'r1.md'), '报告')
+    const pipeline = createReportPipeline(fx.dataDir, fx.dbPath)
+    const channel = fakeChannel()
+    let fail = true
+    const runner: ExtractionRunner = {
+      async runExtraction() {
+        if (fail) throw new Error('模型超时')
+        return [DRAFT_HIGH]
+      },
+      async runExtractionRaw() {
+        throw new Error('not used')
+      },
+    }
+
+    const first = await runPushFunnel({ pipeline, agentRunner: runner, notifyFile: fx.notifyFile, notifyStateFile: fx.stateFile, imChannel: channel })
+    expect(first.extracted[0]).toMatchObject({ slug: 'r1', status: 'failed', error: '模型超时' })
+    expect(first.pushedSlugs).toEqual([])
+    expect(channel.rounds).toHaveLength(0)
+    expect(readNotifyState(fx.stateFile).pushedSlugs).toEqual([])
+
+    fail = false
+    const second = await runPushFunnel({ pipeline, agentRunner: runner, notifyFile: fx.notifyFile, notifyStateFile: fx.stateFile, imChannel: channel })
+    expect(second.extracted[0]).toMatchObject({ slug: 'r1', status: 'done' }) // failed 可重试
+    expect(second.pushedSlugs).toEqual(['r1'])
+    expect(channel.rounds).toHaveLength(1)
+    pipeline.close()
+  } finally {
+    fx.close()
+  }
+})
+
+test('漏斗：低优建议不占卡片（防审批疲劳）——仅进文本摘要', async () => {
+  const fx = makeFixture()
+  try {
+    writeFileSync(join(fx.dataDir, 'r1.md'), '报告')
+    const pipeline = createReportPipeline(fx.dataDir, fx.dbPath)
+    const channel = fakeChannel()
+    const first = await runPushFunnel({
+      pipeline,
+      agentRunner: fakeRunner([DRAFT_LOW, DRAFT_LOW]),
+      notifyFile: fx.notifyFile,
+      notifyStateFile: fx.stateFile,
+      imChannel: channel,
+    })
+    expect(first.extracted[0]).toMatchObject({ inserted: 2 })
+    expect(first.pushedSlugs).toEqual(['r1'])
+    expect(channel.rounds).toHaveLength(1)
+    expect(channel.rounds[0].cards).toHaveLength(0) // 低优/经验假设 → 只发文本
+    expect(channel.rounds[0].digest).toContain('建议 2')
+    pipeline.close()
+  } finally {
+    fx.close()
+  }
+})
+
+test('漏斗：多报告各自推一轮（修复单值字典序漏推），按导入时间正序', async () => {
+  const fx = makeFixture()
+  try {
+    writeFileSync(join(fx.dataDir, 'aaa-旧报告.md'), 'A')
+    writeFileSync(join(fx.dataDir, 'zzz-新报告.md'), 'B')
+    const pipeline = createReportPipeline(fx.dataDir, fx.dbPath)
+    const channel = fakeChannel()
+    const first = await runPushFunnel({
+      pipeline,
+      agentRunner: fakeRunner(),
+      notifyFile: fx.notifyFile,
+      notifyStateFile: fx.stateFile,
+      imChannel: channel,
+    })
+    expect(first.pushedSlugs).toHaveLength(2)
+    expect(channel.rounds).toHaveLength(2)
+    // 已推集合覆盖全部 slug（不再依赖字典序比较）
+    const state = readNotifyState(fx.stateFile)
+    expect(isSlugPushed(state, 'aaa-旧报告')).toBe(true)
+    expect(isSlugPushed(state, 'zzz-新报告')).toBe(true)
+    pipeline.close()
+  } finally {
+    fx.close()
+  }
+})
+
+test('漏斗：webhook 降级——无 IM 通道时走群机器人文本摘要（含 IM 通道则不触发 webhook）', async () => {
+  const fx = makeFixture()
+  try {
+    writeFileSync(join(fx.dataDir, 'r1.md'), '报告')
     const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => ({ ok: true } as Response))
     vi.stubGlobal('fetch', fetchMock)
+    const pipeline = createReportPipeline(fx.dataDir, fx.dbPath)
 
-    const noCfg = await scanAndPush({ dataDir: d, actionsFile, notifyFile: join(dir, 'missing.json'), notifyStateFile: stateFile })
-    expect(noCfg).toEqual({ pushed: false, reason: 'not-configured' })
-    expect(fetchMock).not.toHaveBeenCalled()
-
-    const first = await scanAndPush({ dataDir: d, actionsFile, notifyFile, notifyStateFile: stateFile })
-    expect(first.pushed).toBe(true)
+    const first = await runPushFunnel({ pipeline, agentRunner: fakeRunner(), notifyFile: fx.notifyFile, notifyStateFile: fx.stateFile })
+    expect(first.pushedSlugs).toEqual(['r1'])
     expect(fetchMock).toHaveBeenCalledTimes(1)
     const body = (fetchMock.mock.calls[0][1] as RequestInit).body as string
-    expect(body).toContain('2026-09-26')
-    expect(body).toContain('背离')
-    expect(readNotifyState(stateFile).lastPushedPeriod).toBe('2026-09-26')
+    expect(body).toContain('行动闭环周摘要')
+    expect(isSlugPushed(readNotifyState(fx.stateFile), 'r1')).toBe(true)
 
-    const again = await scanAndPush({ dataDir: d, actionsFile, notifyFile, notifyStateFile: stateFile })
-    expect(again.pushed).toBe(false)
+    // 有 IM 通道时不走 webhook（卡片通道优先）
+    const channel = fakeChannel()
+    writeFileSync(join(fx.dataDir, 'r2.md'), '报告二')
+    await runPushFunnel({ pipeline, agentRunner: fakeRunner(), notifyFile: fx.notifyFile, notifyStateFile: fx.stateFile, imChannel: channel })
     expect(fetchMock).toHaveBeenCalledTimes(1)
-
-    const empty = mkdtempSync(join(tmpdir(), 'dp-scanempty-'))
-    try {
-      const noPeriod = await scanAndPush({ dataDir: empty, actionsFile, notifyFile, notifyStateFile: stateFile })
-      expect(noPeriod.pushed).toBe(false)
-      expect(fetchMock).toHaveBeenCalledTimes(1)
-    } finally {
-      rmSync(empty, { recursive: true, force: true })
-    }
+    expect(channel.rounds).toHaveLength(1)
+    expect(channel.rounds[0].cards).toHaveLength(1)
+    pipeline.close()
   } finally {
-    rmSync(d, { recursive: true, force: true })
+    fx.close()
+  }
+})
+
+test('漏斗：无 runner 跳过自动抽取（报告保持 pending）、不推送；未配置通道不推送', async () => {
+  const fx = makeFixture()
+  try {
+    writeFileSync(join(fx.dataDir, 'r1.md'), '报告')
+    const pipeline = createReportPipeline(fx.dataDir, fx.dbPath)
+    const channel = fakeChannel()
+    const noRunner = await runPushFunnel({ pipeline, agentRunner: null, notifyFile: fx.notifyFile, notifyStateFile: fx.stateFile, imChannel: channel })
+    expect(noRunner.reason).toBeUndefined() // 通道已配置，仅无报告可推
+    expect(noRunner.extracted).toEqual([])
+    expect(noRunner.pushedSlugs).toEqual([])
+    expect(channel.rounds).toHaveLength(0)
+    expect(pipeline.listReports()[0]).toMatchObject({ status: 'pending' }) // 未被抽取
+
+    const unconfigured = makeFixture(false)
+    try {
+      const noChannel = await runPushFunnel({ pipeline, agentRunner: null, notifyFile: unconfigured.notifyFile, notifyStateFile: unconfigured.stateFile })
+      expect(noChannel.reason).toBe('not-configured')
+      expect(noChannel.pushedSlugs).toEqual([])
+    } finally {
+      unconfigured.close()
+    }
+    pipeline.close()
+  } finally {
+    fx.close()
+  }
+})
+
+test('漏斗：IM 发送失败不上状态（该 slug 下轮整轮重试），异常上抛由调度器记日志', async () => {
+  const fx = makeFixture()
+  try {
+    writeFileSync(join(fx.dataDir, 'r1.md'), '报告')
+    const pipeline = createReportPipeline(fx.dataDir, fx.dbPath)
+    const failing: ImPushChannel = {
+      async sendApproval() {
+        throw new Error('飞书发送失败')
+      },
+    }
+    await expect(
+      runPushFunnel({ pipeline, agentRunner: fakeRunner(), notifyFile: fx.notifyFile, notifyStateFile: fx.stateFile, imChannel: failing }),
+    ).rejects.toThrow(/飞书发送失败/)
+    expect(readNotifyState(fx.stateFile).pushedSlugs).toEqual([])
+    pipeline.close()
+  } finally {
+    fx.close()
   }
 })
 
@@ -170,54 +375,5 @@ test('startPushScheduler：启动先扫一次、按间隔重复、异常不中�
     expect(scan).toHaveBeenCalledTimes(3)
   } finally {
     vi.useRealTimers()
-  }
-})
-
-/* ---- M4b：IM 通道推送编排（文本+卡片，优先于 webhook）---- */
-
-test('scanAndPush 优先 IM 通道（文本+高优卡片）且不触发 webhook；失败不落状态（整包重试语义）', async () => {
-  const d = mkdtempSync(join(tmpdir(), 'dp-scanim-'))
-  try {
-    cpSync(join(__dirname, 'report/testdata', 'sample.csv'), join(d, '会员周报-2026-09-26.csv'))
-    const notifyFile = join(dir, 'scanim-notify.json')
-    writeFileSync(notifyFile, JSON.stringify({ platform: 'feishu', url: 'https://hook.example/w' }), 'utf-8')
-    const stateFile = join(dir, 'scanim-state.json')
-    const actionsFile = join(dir, 'scanim-actions.json')
-    const fetchMock = vi.fn(async () => ({ ok: true } as Response))
-    vi.stubGlobal('fetch', fetchMock)
-
-    const sent: Array<{ digest: string; cardCount: number }> = []
-    const okChannel = {
-      sendApproval: vi.fn(async (digest: string, cards: unknown[]) => {
-        sent.push({ digest, cardCount: cards.length })
-      }),
-    }
-    const first = await scanAndPush({ dataDir: d, actionsFile, notifyFile, notifyStateFile: stateFile, imChannel: okChannel })
-    expect(first.pushed).toBe(true)
-    expect(fetchMock).not.toHaveBeenCalled() // 有 IM 通道时不走群机器人
-    expect(sent).toHaveLength(1)
-    expect(sent[0].digest).toContain('2026-09-26')
-    expect(sent[0].cardCount).toBeGreaterThanOrEqual(1) // sample.csv 高优结论成卡
-    expect(readNotifyState(stateFile).lastPushedPeriod).toBe('2026-09-26')
-    expect(okChannel.sendApproval).toHaveBeenCalledTimes(1)
-
-    // 幂等：同期次不再推
-    const again = await scanAndPush({ dataDir: d, actionsFile, notifyFile, notifyStateFile: stateFile, imChannel: okChannel })
-    expect(again.pushed).toBe(false)
-    expect(okChannel.sendApproval).toHaveBeenCalledTimes(1)
-
-    // 失败：不上状态（下轮整包重试），异常上抛由调度器记日志
-    const stateFile2 = join(dir, 'scanim-state2.json')
-    const failChannel = {
-      sendApproval: vi.fn(async () => {
-        throw new Error('飞书发送失败')
-      }),
-    }
-    await expect(
-      scanAndPush({ dataDir: d, actionsFile, notifyFile, notifyStateFile: stateFile2, imChannel: failChannel }),
-    ).rejects.toThrow(/飞书发送失败/)
-    expect(readNotifyState(stateFile2).lastPushedPeriod).toBe('')
-  } finally {
-    rmSync(d, { recursive: true, force: true })
   }
 })

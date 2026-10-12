@@ -1,290 +1,114 @@
-import type { DashboardData } from './types'
+import type { ActionItemView, BoardView } from './types'
 
 /**
- * 演示数据：线上经营 · 渠道投放域（ROI 预算决策）。
- * 数字自洽约束（REVIEW cycle 1/2/3 确立的口径）：所有叙述数字——均值基线、连续天数、
- * 归因占比、行动预期影响——必须能由同屏展示的 series / breakdown / 行动文本复算：
- * 「前 N 日均值」= 窗口前 N 个点的均值（四舍五入 2 位）；contribution 之和 = 标题偏离量
- * （不要求按权重分解到各维度值）；行动影响的所有操作数须出现在屏上文本中。
+ * 演示数据（G7）：无报告（data/raw/ 为空）时前端回退，固定 3 条样例，
+ * 各覆盖一种证据等级（数据支撑 / 逻辑推断 / 经验假设），呈现「报告原文支撑 → 推导 → 无数据降级」叙事链。
+ * 演示操作仅本地临态、不落库（说明条已声明）。
  */
-export const demoData: DashboardData = {
+
+const NOW = '2026-10-12T09:00:00.000Z'
+
+const DEMO_ITEMS: ActionItemView[] = [
+  {
+    id: 'demo-1',
+    reportId: null,
+    sourceKind: 'extracted',
+    title: '对 90 天未复购会员发放阶梯券召回',
+    rationale: '复购率连续下滑，报告建议以阶梯券激活沉睡会员。',
+    scene: '日常',
+    lifecycle: 'R复购',
+    expectedImpact: '30 日内复购率回升约 2pp，券成本可控在毛利内。',
+    metricRef: null,
+    priority: 'high',
+    effort: 'medium',
+    confidence: 0.92,
+    evidence: {
+      facts: [
+        {
+          text: '复购会员贡献了近半数销售额，但复购率连续四周下滑。',
+          quote: '会员复购率由 12% 降至 9%，复购会员贡献销售额占比 48%。',
+        },
+      ],
+      level: '数据支撑',
+      reasoning: '报告数据直接给出复购率降幅与复购贡献占比，召回投入的边际收益可由同屏数字复算。',
+    },
+    evidenceLevel: '数据支撑',
+    status: 'suggested',
+    dismissedReason: null,
+    decidedBy: null,
+    decidedAt: null,
+    decidedVia: null,
+    createdAt: NOW,
+    updatedAt: NOW,
+    tasks: [],
+  },
+  {
+    id: 'demo-2',
+    reportId: null,
+    sourceKind: 'extracted',
+    title: '将自播开播时间从 20:00 调整至 19:00 错峰',
+    rationale: '黄金时段竞价拥挤，报告推断提前一小时开播可降低投流成本。',
+    scene: '日常',
+    lifecycle: 'A获取',
+    expectedImpact: '单场投流成本下降，同预算下直播时长增加约 1 小时。',
+    metricRef: null,
+    priority: 'medium',
+    effort: 'low',
+    confidence: 0.55,
+    evidence: {
+      facts: [
+        { text: '同类目头部直播间集中在 20:00 后开播，流量竞价达到全天峰值。' },
+      ],
+      level: '逻辑推断',
+      reasoning: '报告未提供分时段竞价数据，仅依据类目开播分布推断错峰可降低成本，需小流量验证。',
+    },
+    evidenceLevel: '逻辑推断',
+    status: 'suggested',
+    dismissedReason: null,
+    decidedBy: null,
+    decidedAt: null,
+    decidedVia: null,
+    createdAt: NOW,
+    updatedAt: NOW,
+    tasks: [],
+  },
+  {
+    id: 'demo-3',
+    reportId: null,
+    sourceKind: 'extracted',
+    title: '大促前 3 天启动社群预热种草',
+    rationale: '行业惯例认为大促前社群预热可提前锁定意向，报告据此提出建议。',
+    scene: '大促',
+    lifecycle: 'A激活',
+    expectedImpact: '大促首日 Opening 峰值前移，社群渠道进店占比提升。',
+    metricRef: null,
+    priority: 'low',
+    effort: 'medium',
+    confidence: 0.3,
+    evidence: {
+      facts: [{ text: '报告引用行业观察，无本店历史大促对照数据。' }],
+      level: '经验假设',
+      reasoning: '无本店数据支撑，依赖行业经验假设；建议以单次大促 A/B 验证后再固化节奏。',
+    },
+    evidenceLevel: '经验假设',
+    status: 'suggested',
+    dismissedReason: null,
+    decidedBy: null,
+    decidedAt: null,
+    decidedVia: null,
+    createdAt: NOW,
+    updatedAt: NOW,
+    tasks: [],
+  },
+]
+
+export const demoBoardView: BoardView = {
   title: '决策看板',
-  lede: '打开就知道今天要拍板什么：按紧急度排序的结论，展开可查推导过程与核心指标，直接采纳建议行动。',
-  window: '09-12 ~ 09-25',
-  updatedAt: '2026-09-25 09:00',
-  metrics: [
-    {
-      id: 'roi-search-a',
-      name: 'ROI（渠道A·搜索计划）',
-      unit: '倍',
-      caliber: 'GMV / 消耗，渠道A搜索计划口径',
-      format: 'x',
-    },
-    {
-      id: 'roi-feed-b',
-      name: 'ROI（渠道B·信息流）',
-      unit: '倍',
-      caliber: 'GMV / 消耗，渠道B信息流口径',
-      format: 'x',
-    },
-    {
-      id: 'cvr-overall',
-      name: '转化率（全站）',
-      unit: '%',
-      caliber: '下单用户数 / 访问用户数',
-      format: 'percent',
-    },
-    {
-      id: 'ctr-display-c',
-      name: 'CTR（渠道C·展示广告）',
-      unit: '%',
-      caliber: '点击量 / 展示量',
-      format: 'percent',
-    },
-  ],
-  series: [
-    {
-      metricId: 'roi-search-a',
-      points: [
-        { date: '09-12', value: 1.25 },
-        { date: '09-13', value: 1.31 },
-        { date: '09-14', value: 1.22 },
-        { date: '09-15', value: 1.28 },
-        { date: '09-16', value: 1.18 },
-        { date: '09-17', value: 1.24 },
-        { date: '09-18', value: 1.3 },
-        { date: '09-19', value: 1.21 },
-        { date: '09-20', value: 1.15 },
-        { date: '09-21', value: 1.08 },
-        { date: '09-22', value: 1.04 },
-        { date: '09-23', value: 0.95 },
-        { date: '09-24', value: 0.81 },
-        { date: '09-25', value: 0.72 },
-      ],
-      baselines: [{ kind: 'threshold', label: '止损线 1.0', value: 1.0 }],
-    },
-    {
-      metricId: 'roi-feed-b',
-      points: [
-        { date: '09-12', value: 1.42 },
-        { date: '09-13', value: 1.48 },
-        { date: '09-14', value: 1.45 },
-        { date: '09-15', value: 1.51 },
-        { date: '09-16', value: 1.44 },
-        { date: '09-17', value: 1.49 },
-        { date: '09-18', value: 1.55 },
-        { date: '09-19', value: 1.6 },
-        { date: '09-20', value: 1.58 },
-        { date: '09-21', value: 1.65 },
-        { date: '09-22', value: 1.72 },
-        { date: '09-23', value: 1.85 },
-        { date: '09-24', value: 1.98 },
-        { date: '09-25', value: 2.1 },
-      ],
-      baselines: [{ kind: 'comparison', label: '前 7 日均值 1.48', value: 1.48 }],
-    },
-    {
-      metricId: 'cvr-overall',
-      points: [
-        { date: '09-12', value: 0.032 },
-        { date: '09-13', value: 0.033 },
-        { date: '09-14', value: 0.032 },
-        { date: '09-15', value: 0.031 },
-        { date: '09-16', value: 0.033 },
-        { date: '09-17', value: 0.032 },
-        { date: '09-18', value: 0.032 },
-        { date: '09-19', value: 0.031 },
-        { date: '09-20', value: 0.03 },
-        { date: '09-21', value: 0.03 },
-        { date: '09-22', value: 0.029 },
-        { date: '09-23', value: 0.029 },
-        { date: '09-24', value: 0.028 },
-        { date: '09-25', value: 0.028 },
-      ],
-      baselines: [{ kind: 'comparison', label: '前 7 日均值 3.2%', value: 0.032 }],
-    },
-    {
-      metricId: 'ctr-display-c',
-      points: [
-        { date: '09-12', value: 0.019 },
-        { date: '09-13', value: 0.019 },
-        { date: '09-14', value: 0.018 },
-        { date: '09-15', value: 0.018 },
-        { date: '09-16', value: 0.018 },
-        { date: '09-17', value: 0.017 },
-        { date: '09-18', value: 0.017 },
-        { date: '09-19', value: 0.016 },
-        { date: '09-20', value: 0.016 },
-        { date: '09-21', value: 0.016 },
-        { date: '09-22', value: 0.015 },
-        { date: '09-23', value: 0.015 },
-        { date: '09-24', value: 0.014 },
-        { date: '09-25', value: 0.014 },
-      ],
-      baselines: [{ kind: 'target', label: '目标线 1.8%', value: 0.018 }],
-    },
-  ],
-  conclusions: [
-    {
-      id: 'c1',
-      severity: 'high',
-      title: '渠道A·搜索计划 ROI 0.72，连续 3 日低于止损线 1.0',
-      summary: '品牌专享词组竞价上涨推高 CPA，按当前节奏日损失约 ¥1,400。',
-      window: '09-12 ~ 09-25',
-      updatedAt: '2026-09-25 09:00',
-      metricIds: ['roi-search-a'],
-      derivation: [
-        {
-          kind: 'detection',
-          text: 'ROI 自 09-23 起连续 3 日低于止损线 1.0，09-25 收于 0.72（前 7 日均值 1.25）。',
-        },
-        {
-          kind: 'attribution',
-          text: '归因到计划内广告组：品牌专享词组贡献偏离 -0.42（占 75%），通用词组 +0.08、竞品词组 +0.06，合计 -0.28。',
-        },
-        {
-          kind: 'rule',
-          text: '命中规则「ROI < 1.0 持续 3 日 → 暂停计划并释放预算」（第 3 日）。',
-        },
-        {
-          kind: 'suggestion',
-          text: '今日 18:00 前暂停该计划，释放约 ¥5,000/日预算，可移至渠道B。',
-        },
-      ],
-      breakdown: [
-        { dimension: '品牌专享词组', contribution: -0.42, value: 0.61, delta: '-52%' },
-        { dimension: '通用词组', contribution: 0.08, value: 1.35, delta: '+3%' },
-        { dimension: '竞品词组', contribution: 0.06, value: 1.18, delta: '+2%' },
-      ],
-      actions: [
-        {
-          id: 'a1',
-          conclusionId: 'c1',
-          text: '暂停渠道A·搜索计划，释放预算移至渠道B',
-          impact: '止损约 ¥1,400/日',
-        },
-      ],
-    },
-    {
-      id: 'c2',
-      severity: 'medium',
-      title: '渠道B·信息流 ROI 2.1，环比 +42%，预算利用率 92%',
-      summary: '新素材组 CTR 提升带动转化，预算临近触顶，存在放量空间。',
-      window: '09-12 ~ 09-25',
-      updatedAt: '2026-09-25 09:00',
-      metricIds: ['roi-feed-b'],
-      derivation: [
-        {
-          kind: 'detection',
-          text: 'ROI 09-25 收于 2.1，环比前 7 日均值 1.48 上升 42%，为全渠道最高。',
-        },
-        {
-          kind: 'attribution',
-          text: '归因到素材组：新版短视频素材组贡献偏离 +0.46（占 74%），其余素材组合计 +0.16。',
-        },
-        {
-          kind: 'rule',
-          text: '命中规则「ROI > 1.8 且预算利用率 > 85% → 建议追加预算」（当前利用率 92%）。',
-        },
-        {
-          kind: 'suggestion',
-          text: '追加渠道B日预算 20%（¥3,000 → ¥3,600），观察 3 日 ROI 衰减再定后续。',
-        },
-      ],
-      breakdown: [
-        { dimension: '短视频素材组', contribution: 0.46, value: 2.6, delta: '+61%' },
-        { dimension: '图文素材组', contribution: 0.1, value: 1.8, delta: '+12%' },
-        { dimension: '旧素材组', contribution: 0.06, value: 1.5, delta: '+4%' },
-      ],
-      actions: [
-        {
-          id: 'a2',
-          conclusionId: 'c2',
-          text: '追加渠道B日预算 20%（¥3,000 → ¥3,600）',
-          impact: '预计增量 GMV 约 ¥1,300/日（增量 ¥600 × ROI 2.1）',
-        },
-      ],
-    },
-    {
-      id: 'c3',
-      severity: 'medium',
-      title: '全站转化率 2.8%，环比 -12.5%，连续 7 日低于对比基线',
-      summary: '落地页 B 实验组跳出率上升为主因，该实验覆盖全站 45% 流量。',
-      window: '09-12 ~ 09-25',
-      updatedAt: '2026-09-25 09:00',
-      metricIds: ['cvr-overall'],
-      derivation: [
-        {
-          kind: 'detection',
-          text: '全站转化率 09-25 收于 2.8%，前 7 日均值 3.2%（偏离 -0.4pt），连续 7 日低于基线。',
-        },
-        {
-          kind: 'attribution',
-          text: '归因（单位 pt）：落地页B实验组 -0.38、新客渠道 -0.08、直播端 +0.04、自然流量 +0.02，合计 -0.40。',
-        },
-        {
-          kind: 'rule',
-          text: '命中规则「核心指标连续 5 日低于对比基线 → 触发实验复核」（当前已连续 7 日）。',
-        },
-        {
-          kind: 'suggestion',
-          text: '回滚落地页 B 实验，保留 B 组胜出的首屏组件单独复测。',
-        },
-      ],
-      breakdown: [
-        { dimension: '落地页B实验组', contribution: -0.38, value: 0.022, delta: '-31%' },
-        { dimension: '新客渠道', contribution: -0.08, value: 0.026, delta: '-19%' },
-        { dimension: '直播端', contribution: 0.04, value: 0.036, delta: '+6%' },
-        { dimension: '自然流量', contribution: 0.02, value: 0.033, delta: '+3%' },
-      ],
-      actions: [
-        {
-          id: 'a3',
-          conclusionId: 'c3',
-          text: '回滚落地页 B 实验，保留胜出组件复测',
-          impact: '找回转化率约 0.4pt，按日均访问 3.5 万折算约 +140 单/日',
-        },
-      ],
-    },
-    {
-      id: 'c4',
-      severity: 'low',
-      title: '渠道C·展示广告 CTR 降至 1.4%，连续 9 日低于目标线',
-      summary: '三套在投素材全部进入疲劳期（同素材投放 21 天），暂不影响 ROI。',
-      window: '09-12 ~ 09-25',
-      updatedAt: '2026-09-25 09:00',
-      metricIds: ['ctr-display-c'],
-      derivation: [
-        {
-          kind: 'detection',
-          text: 'CTR 由 09-12 的 1.9% 降至 1.4%，连续 9 日低于 1.8% 目标线。',
-        },
-        {
-          kind: 'attribution',
-          text: '归因（单位 pt）：素材C3 -0.18、素材C2 -0.16、素材C1 -0.16，合计 -0.50。',
-        },
-        {
-          kind: 'rule',
-          text: '命中规则「CTR 连续 5 日低于目标 → 提示更换素材（不自动干预）」（当前已连续 9 日）。',
-        },
-        {
-          kind: 'suggestion',
-          text: '下周二投放日更换素材组，本周不动作。',
-        },
-      ],
-      breakdown: [
-        { dimension: '素材C3', contribution: -0.18, value: 0.013, delta: '-32%' },
-        { dimension: '素材C2', contribution: -0.16, value: 0.014, delta: '-26%' },
-        { dimension: '素材C1', contribution: -0.16, value: 0.015, delta: '-21%' },
-      ],
-      actions: [
-        {
-          id: 'a4',
-          conclusionId: 'c4',
-          text: '下周二投放日更换渠道C素材组',
-          impact: 'CTR 预期回到 1.8% 目标线',
-        },
-      ],
-    },
-  ],
+  lede: '报告驱动的行动闭环：从分析报告提取决策建议，确认后拆解任务、执行后回录反馈，证据可展开核查。',
+  reports: [],
+  actionItems: DEMO_ITEMS,
+  stats: { suggested: 3, adopted: 0, dismissed: 0, manual: 0 },
+  notify: { configured: false },
+  modelChain: { available: true, providers: [] },
+  isDemo: true,
 }

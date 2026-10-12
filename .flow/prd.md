@@ -1,100 +1,164 @@
-# PRD · M4 移动审批：飞书+钉钉卡片直审（内网单实例）
+# PRD：decision-platform M5 — 报告驱动行动闭环看板
 
-> 事实源：`.flow/proposal.md`（v1.1 定稿）；对齐 `.flow/red-team.md`（GO，KA1-KA5）。项目无 issue tracker，落盘 `.flow/prd.md`（降级路径）。
->
-> **2026-09-27 范围变更（用户决策）**：M4c 钉钉**暂缓**——前置门与适配器不做，M4 交付范围收窄为仅飞书；dingtalk 配置 schema 与平台无关纯函数层保留，钉钉适配列 M5+ 候选。KA5 文案密度用户真机判定「敢拍板」，无需加密信息密度。
+合成自 `.flow/proposal.md`（最高优先）+ 红队报告 + 代码库调查。本文件阐述并补细，不推翻 proposal 决策。
 
 ## Problem Statement
 
-决策人已经能在手机上收到周报摘要推送（M3 群机器人纯文本），但「拍板」必须回到 PC 打开看板操作——通勤、出差、会议间隙收到「高优先级 N 条待拍板」时只能记下来回办公室。此外，M3 的「自动推送」实际只在有人打开看板时才触发（`GET /api/dashboard` 内 fire-and-forget），而看板目前只在开发机上手动启动，既不稳定也存在「没人开看板 → 永不推送」的断链。
+经营者每周收到的是**已成文的数据分析报告**，而不是可计算的数据表。当前 decision-platform 只吃会员周报 CSV（解析→规则→结论），与真实工作流脱节：报告里的结论建议需要人重新读一遍、口头讨论、事后无人追踪是否执行、执行后效果无回录。决策建议、行动确认、执行反馈散落在聊天记录里，没有闭环。
 
 ## Solution
 
-决策人在自己常用的 IM（飞书/钉钉）里完成候选决策审批：每周周报导入后，每条高优结论自动推成一张**自解释的交互卡片**（结论标题 + 关键数字 + 结论全文 + 归因 top 渠道 + 【采纳】【驳回】按钮），点按钮即完成审批，卡片即时变为结果态并留痕「谁、何时、经何渠道批的」；PC 看板状态同步更新。服务以**内网 Mac mini 单实例常驻**（launchd 自启 + 静态文件服务 + 定时扫描推送），零公网入站（飞书长连接 / 钉钉 Stream 均为出站 WebSocket）。
+把看板重构为**报告驱动的行动闭环**（对齐 pi-xanthil Actions 模式）：
+
+1. 报告（md/txt）放入 `data/raw/` 即被识别；
+2. LLM（pi-agent-runtime 0.4.1 `runWorker`）从报告抽取**决策建议行动项**——每项带结构化证据（报告原文逐字引用、四级证据等级、推导过程）与由证据派生的置信度；
+3. 人在看板或**飞书审批卡片**上确认（采纳/驳回）；
+4. 采纳项拆解为带负责人/截止日的执行任务；
+5. 执行后回录反馈（结果/指标变化/复盘/评分），形成可追溯的行动资产。
+
+CSV 解析、规则引擎、异动检测管线退役。
 
 ## User Stories
 
-1. As a 决策人, I want 周报导入后每条高优结论自动推送一张飞书/钉钉卡片, so that 不打开 PC 看板也知道本周要拍板什么。
-2. As a 决策人, I want 卡片上有【采纳】【驳回】按钮, so that 30 秒内完成审批且不离开 IM。
-3. As a 决策人, I want 卡片正文包含结论全文与归因 top 渠道, so that 不看完整推导链也敢负责任地拍板（红队 KA5）。
-4. As a 决策人, I want 点完按钮后卡片立即变为结果态（审批人+时间+结果）, so that 不重复审批、事后可查。
-5. As a 决策人, I want 重复点击或平台重试不会产生脏数据, so that 先到先得、后到提示已处理。
-6. As a 决策人, I want 中低优结论仍收到文本周摘要, so that 不丢全量信息但只在手机上处理高优。
-7. As a 决策人, I want 审批留痕（谁/何时/经卡片还是 PC）在看板上可见, so that 跨周对照时知道每条决策的来历。
-8. As a 运营/分析, I want PC 看板照常显示行动状态并同步移动端审批结果, so that 闭环数据单一事实源。
-9. As a 运营/分析, I want 未配置自建应用时推送降级为现有群机器人文本摘要, so that 现有使用不回归。
-10. As a 用户, I want Mac mini 重启后服务与数据自动恢复（launchd 常驻）, so that 不需要人工干预。
-11. As a 用户, I want 局域网内任意设备（MacBook/手机）浏览器直接打开看板（后端服务静态构建产物）, so that 不依赖 vite dev server。
-12. As a 用户, I want 开发实例与生产实例并存互不干扰（端口区分）, so that MacBook/Mac mini 上仍可本地开发。
-13. As a 用户, I want IM 应用凭证（appId/appSecret/审批人 id）集中在一个不入库的配置文件, so that 沿袭 notify.json 惯例、凭证不泄漏。
-14. As a 用户, I want 飞书与钉钉配置可共存、按平台分别推送审批人, so that 两个 IM 的决策人都能收到卡片。
-15. As a 用户, I want 周报导入后即使无人打开看板，卡片也在 1 分钟内自动发出（定时扫描新期次）, so that 移动审批不依赖任何人先访问看板（红队 KA1）。
-16. As a 用户, I want 钉钉 Stream 若实测不支持卡片回调时自动降级为文本摘要, so that 不为一家平台引入公网暴露（proposal §8 预案）。
-17. As a 用户, I want README 写清单实例部署、端口、睡眠设置与安全边界（仅可信局域网）, so that 双机模式切换有据可依。
+1. As a 经营者, I want 把分析报告放进一个目录就能自动生成决策建议行动项, so that 不用手动读报告抄行动。
+2. As a 经营者, I want 每条行动项展示它的报告依据（原文引用、证据等级、推导过程）, so that 30 秒内判断这条建议靠不靠谱。
+3. As a 经营者, I want 每条行动项有由证据派生的置信度而非 LLM 自评, so that 排序可信。
+4. As a 经营者, I want 在看板上采纳或驳回建议, so that 决策有记录。
+5. As a 审批人, I want 在飞书收到审批卡片直接点采纳/驳回, so that 不用开电脑也能拍板。
+6. As a 审批人, I want 卡片上看到结论、证据摘要与置信度, so that 移动端也有足够信息拍板。
+7. As a 审批人, I want 重复点击卡片幂等、旧报告卡片点不了, so that 不会误操作。
+8. As a 店长/执行人, I want 被采纳的行动项拆成带负责人和截止日的任务, so that 知道谁在什么时候做什么。
+9. As a 店长/执行人, I want 更新任务状态（待办/进行/完成）, so that 进度可见。
+10. As a 经营者, I want 执行完后回录结果、指标变化、复盘和评分, so that 行动效果沉淀。
+11. As a 经营者, I want 按状态（建议/已采纳/已驳回）、证据等级、优先级过滤行动项, so that 快速聚焦。
+12. As a 经营者, I want 看板按报告期次组织行动项并保留历史, so that 每周的报告决策可回溯。
+13. As a 经营者, I want 一份报告只抽取一次（幂等）, so that 不重复推送打扰。
+14. As a 经营者, I want 新报告到达后自动推送（飞书卡片优先，未配置时群机器人文本摘要）, so that 不需要任何人先打开看板。
+15. As a 经营者, I want LLM 不可用/无报告时看板有明确状态（而非静默空白）, so that 知道发生了什么。
+16. As a 经营者, I want 抽取失败时能手动重试, so that 临时故障不丢一份报告。
+17. As a 开发者, I want 每次模型调用有任务账本与审计留痕, so that 消费可核查、符合 SDK 接入标准。
+18. As a 开发者, I want 抽取管线可离线测试（合成 transport 回放）, so that 不依赖真实供应商跑测试。
 
 ## Implementation Decisions
 
-**分期与范围**（proposal §7 定稿）：M4a 内网单实例地基 → M4b 飞书卡片直审 → M4c 钉钉卡片直审。M4 整体不含：IM 内 H5（档 2）、卡片备注输入、多审批人会签、原生审批中心（均 M5+ 候选）。
+**后端管线（替换）**
+- 新增 SDK 适配层（业务代码唯一触达 pi-agent-runtime 的位置）：显式模型链（MiniMax-M3 主 + 小米 mimo 备，密钥从 `~/.pi/agent/auth.json` 或环境变量读，缺密钥时降级不阻塞启动）、JSONL 审计 sink（append 即持久确认，失败上抛关闭准入）、文件持久任务账本 BudgetStore（同任务唯一 lease、配置签名、重启不清账、累计不封顶策略）、本地单用户授权策略（model/publish 放行，无工具）。
+- 抽取任务 = `runWorker`：无工具单次模型调用 + 宿主 validator（对齐 AGENT-RUNTIME P2：固定结构化变换用 Worker）。validator 复刻 pi-xanthil 的归一化：JSON 数组提取与宽松修复、scene/lifecycle/priority/effort 枚举校验、evidence 结构化（facts+quote、四级 level、reasoning）、confidence 由证据派生（base(level)+quote 加成、无 facts 封顶 0.5）、占位文本拒绝。
+- 抽取 prompt 对齐 pi-xanthil Actions：行动方案提取引擎角色、严格 JSON、quote 必须逐字、报告无数据则降级"经验假设"、无行动项返回空数组；输入前裁剪与脱图（图片引用替换为占位）。
+- 报告识别：`data/raw/` 下 `.md`/`.txt`（UTF-8）；报告身份 = 文件名（slug 化）；已处理报告记录在库，调度器只对**新报告**触发抽取（幂等：每报告一次，失败可手动重试）。
+- 退役：CSV 解析、规则引擎、指标口径、异动结论装配、跨周对照（review.ts）。`data/raw/` 中旧 CSV 不再读取。
 
-**M4a · 地基**
+**存储（替换）**
+- SQLite（node:sqlite，零新依赖）单文件库（`data/board.db`），四张表对齐 pi-xanthil Actions schema 并扩展：`reports`（身份、文件名、导入时间、状态）、`action_items`（status: suggested/adopted/dismissed、title/rationale/scene/lifecycle/expectedImpact/priority/effort/confidence、evidence_json/evidence_level、report 关联、审批留痕 decidedBy/decidedAt/decidedVia）、`action_tasks`（owner/dueDate/status: todo-doing-done/priority/note，外键级联）、`action_feedback`（adopted/outcome/metricDelta/review/score，一任务一条）。旧 `data/actions.json` 不迁移（产品形态变更，旧文件保留在磁盘归档）。
 
-- 后端新增**静态文件服务**：存在构建产物 `dist/` 时同端口 serve（SPA fallback 到 index.html，`/api` 路径优先匹配 API）；无 `dist/` 时行为不变（本地开发走 vite）。
-- **端口策略**：开发沿用前端 5180 / 后端 8642；生产由环境变量指定（`PORT` / `HOST`），launchd 配置固定生产端口 **9642**、绑定 `0.0.0.0`（可信局域网）。README 安全表述改写：仅可信局域网、禁止端口映射到公网。
-- **常驻**：提供 launchd LaunchAgent plist 模板（RunOnLoad + KeepAlive）与部署说明；README 注明 Mac mini 节能设置（防止自动睡眠）。
-- **审批留痕**：行动记录新增 `decidedBy`（审批人标识）、`decidedAt`（服务端时间）、`decidedVia`（`card` | `pc`）；状态回滚到 pending 时清空三者；PC 端现有 PUT 请求体不变（via 记 `pc`、decidedBy 留空），卡片回调走内部落库路径（via 记 `card`、decidedBy 为配置的审批人名）。
-- **推送触发独立化**（红队 KA1）：服务进程内**定时扫描**（60 秒间隔）周报目录，发现新期次即走既有幂等推送（`maybePushNewPeriod` 语义）；看板访问触发的推送保留为兜底。扫描逻辑为纯函数（目录 → 最新期次），定时器只是薄封装。
+**API（node:http 路由表保持手写风格）**
+- `GET /api/dashboard`：概览（最新报告、行动项统计、通知状态）+ 全量行动项（含任务与反馈）。
+- `POST /api/reports/extract`：对指定（或最新未处理）报告手动触发抽取；`GET /api/reports`：报告列表与处理状态。
+- `POST /api/actions` / `PATCH /api/actions/:id`（确认状态变更）/ `DELETE /api/actions/:id`。
+- `GET/POST /api/actions/:id/tasks`、`PATCH /api/tasks/:id`。
+- `POST /api/tasks/:id/feedback`、`GET /api/tasks/:id/feedback`。
+- `POST /api/notify/push`（手动重推）、`POST /api/notify/test` 保留语义。
+- `GET /api/health` 保留；新增模型链可用性信息。
 
-**M4b/M4c · 卡片直审**
+**飞书审批（保留并适配）**
+- 长连接桥接、卡片直审、幂等、留痕、先到先得、过期卡片拒绝——机制原样保留（im.ts / im-feishu.ts）。
+- 审批对象从"结论"改为"行动项"：卡片正文 = 行动项 + 证据摘要（top fact 引用 + 证据等级 + 置信度）+ 预期效果；按钮 采纳（→adopted）/ 驳回（→dismissed）。
+- 推送策略：每份新报告抽取后，**高优先级或高置信（数据支撑级）行动项逐条推卡片**，其余进文本摘要（防审批疲劳——红队 #4 优化）。
+- 未配置飞书时回落群机器人 webhook 文本摘要（M3 通道保留）。
 
-- **IM 配置**：`data/im.json`（不入库）：平台列表，每项 `{ platform: 'feishu'|'dingtalk', appId, appSecret, approverUserId, approverName }`；与既有 `notify.json`（群机器人文本降级）并存。
-- **推送策略**：仅 **high 严重度**结论逐条发卡片（每条一张，带各自的【采纳】【驳回】）；medium/low 与期次汇总信息继续走文本摘要（群机器人或应用消息文本，取配置可用者）。无 high 结论的期次只发文本摘要。
-- **卡片文案结构**（红队 KA5）：结论标题（含严重度）、关键数字（指标本期值与偏离）、结论 summary 全文、归因 top 3 渠道行（维度 + 贡献/变化）、按钮【采纳】【驳回】。纯函数生成卡片数据结构，平台适配器负责翻译成各平台卡片 schema。
-- **审批回调**：按钮回调 → 按 actionId + 目标状态走既有行动状态机落库（幂等：已非 pending 时返回结果态文案而非报错）→ 决定者留痕 → 更新原卡片为结果态（「已采纳/已驳回 · 审批人 · 时间」）。回调处理为纯函数（回调载荷 + store → 新 store + 回执），SDK 网络层不进单测。
-- **平台适配**：引入官方 Node SDK（飞书 `@larksuiteoapi/node-sdk` 长连接；钉钉官方 Stream SDK）；适配器接口统一（发卡、收回调、更新卡片），M4c 复用接口只新增钉钉实现。
-- **前置门**（红队 KA2/KA4）：M4b 开工前飞书 demo 实测（内网发卡 + 收按钮回调 + 更新卡片）通过；M4c 开工前钉钉 Stream 卡片回调实测通过，失败则钉钉按 proposal §8 降级（仅文本摘要），范围收窄记录在 tasks。
-- **降级路径**：未配置 im.json、SDK 初始化失败、卡片发送失败——记日志并回落文本摘要；文本摘要链路（M3）不删。
+**前端（替换内容区，保留骨架与视觉基线）**
+- 单页三段式改为「报告概览头 + 行动项列表 + 任务/反馈」：
+  - 行动项卡片：标题、优先级/effort、置信度、scene/lifecycle 标签、证据可展开（四级色标：数据支撑=绿/多源佐证=蓝/逻辑推断=琥珀/经验假设=灰，quote 块引用原文）、预期效果、采纳/驳回操作。
+  - 采纳项展开任务列表（新增/编辑 owner、截止日、状态）与反馈回录表单（结果、指标变化、复盘、评分）。
+  - 过滤器：状态、证据等级、优先级；标注"证据等级由提取模型自评，未做真实数据重验证"。
+- 演示回退保留（无报告/无密钥时 isDemo 标注演示行动项）。ECharts 图表与多周趋势随 CSV 管线退役。
+- 视觉沿用现有 Xanthil 基线（token/卡片/焦点环）。
 
-**数据与并发**
-
-- 行动存储仍为单文件 JSON + 原子写；多人/多渠道同时审批按先到先得，后到方收到「已被处理」回执（对平台重试天然幂等）。
-- `data/actions.json`、`im.json`、`notify.json`、推送状态随生产实例单点存在（Mac mini），不随 git 同步——README 双机说明改写：Mac mini = 生产（唯一事实源），MacBook = 纯开发机。
+**测试缝（seam）**
+- 最高缝：`startServer(options)` 已有注入缝（dataDir 等注入）扩展为 dbPath/agentRunner 注入——服务测试全走 HTTP + 内存/临时库。
+- SDK 缝：agent 层暴露 `runExtraction(report) → ActionItemDraft[]`，内部经 runtime.runWorker；测试用 `pi-agent-runtime/testing` 的 `createReplay` 合成 transport（离线、不调真实供应商），真实验证单独一次性有界执行。
+- 解析/归一化（validate）纯函数直接单测。
 
 ## Testing Decisions
 
-- 好测试只测外部行为：输入（配置/回调载荷/目录内容/HTTP 请求）→ 可观察输出（store 变化/回执/HTTP 响应/卡片数据结构），不测内部调用序列。
-- 测试缝（沿 M3 已有缝扩展，新增两条）：
-  1. **既有缝复用**：API 端点（注入 dataDir/tmpdir 起 server 测 HTTP 行为）；行动存储纯函数；digest 纯函数。
-  2. **新缝 · IM 适配器边界**：卡片数据结构生成与回调处理均为纯函数（fake store / 注入配置）；SDK 真实网络交互只在 M4b/M4c 验收时人工实测（demo 前置门 + 真实周报 e2e）。
-  3. **新缝 · 推送触发**：目录扫描纯函数（注入 fixture 目录与上次推送期次）；定时器 wiring 不进单测。
-  4. **新缝 · 静态服务**：起 server 后断言 GET / 返回 index.html、未知路径 SPA fallback、/api 路由不受影响。
-- 前端：沿组件契约缝（mock fetch）；新增留痕展示的渲染断言。
-- 先例：M3 `notify.test.ts`（payload 差异/幂等/失败不抛）、`actions.test.ts`（四态校验/原子写）、`server.test.ts`（注入 tmpdir 起服务）。
+- 只测外部行为：HTTP 端点契约（含负向：非法 body、不存在 id、无报告、模型失败降级）、抽取归一化纯函数（枚举、证据降级、confidence 公式、quote 校验、宽松 JSON 修复）、调度幂等（同报告不重复抽取/推送）、飞书卡片映射（复用 im-feishu.test.ts 模式：channel 注入假对象）。
+- 先例：`server/server.test.ts`（注入 options + 真实 HTTP 监听）、`server/im-feishu.test.ts`（channel 假对象）、vitest 全仓 `npm run verify`（tsc + vitest + build）。
+- SDK 消费测试用合成回放 transport；真实 Provider 只在实现完成后一次有界真调（用户委托已含真实使用意图）。
 
 ## Out of Scope
 
-- IM 内 H5 移动版（B 层，随档 2 公网升级解锁）与免登
-- 企业微信、个人微信（公众号/小程序）渠道
-- 卡片上输入备注、多审批人（或签/会签）、超时未审提醒
-- 原生审批中心（飞书/钉钉审批 API）对接
-- 公网部署、域名、HTTPS、API 会话鉴权（档 2 内容；本期维持内网边界）
-- 数据存储迁移（SQLite/DuckDB 仍为 M5+ 候选）
-- 前端移动端适配（手机连 WiFi 访问 PC 版仅作应急兜底，不做适配）
+- CSV/规则引擎/异动检测/多周趋势的任何保留或迁移。
+- 黄金策式框架图生成、多分析模型批量抽取。
+- 钉钉适配、多审批人（或签/会签）、公网部署与鉴权升级。
+- pi-xanthil 报告产出的自动管道对接（报告仍人工放入目录；来源自动化另行立项）。
+- 旧 data/actions.json 历史迁移。
 
 ## Further Notes
 
-- 红队 KA5（卡片信息密度）在 M4b 卡片文案设计时用 M2 真实结论 mock 自验；若「不敢盲批」成立，触发档 2/B 层优先级重议（escalation 而非静默改分期）。
-- 卡片消息频控：自建应用单聊推送一般无硬限，M4b 实测确认；有则加发送间隔。
-- Mac mini 睡眠期间推送延迟可接受（周审批非实时场景），README 明示，不引入 caffeinate 强制常醒。
+- 部署形态不变：Mac mini 单实例 launchd 常驻、局域网访问、`data/*.json`/`data/board.db` 不入库。
+- runWorker 单次保护参数初值：输入裁剪 16k 字符、maxOutputTokens 8192、modelTimeoutMs 120s、controlTimeoutMs 30s（可调，不构成预算承诺）。
+- 本 PRD 无 issue tracker，按 dev-flow 降级写 `.flow/prd.md`。
 
-## GRILL 决议（留白自答，2026-09-27）
+## PRD 对 proposal 的增量（auto 模式自批清单）
 
-1. **期次推送幂等粒度**：文本摘要 + N 张 high 卡片为一个整体，全部成功才落 `lastPushedPeriod`；任一失败下轮扫描全量重试，重复推送窗口明示接受（沿用 M3 GRILL 决议 4 的单机哲学）。
-2. **HTTP PUT 不接受 decidedBy**：无鉴权端点防伪造留痕；decidedBy 只由卡片回调路径写入；PC 渠道 `via='pc'`、decidedBy 留空。
-3. **审批落库并发**：单实例进程内，回调与 PUT 的 read→update→write 保持同步无 await 间隙（天然原子）；先到先得，后到方收到「已被处理」回执文案而非报错。
-4. **卡片结果态更新失败**：落库是事实源，卡片更新 best-effort（记日志），不回滚审批。
-5. **生产运行形态**：后端 tsx 直接跑（不加构建步骤）；launchd LaunchAgent（RunOnLoad + KeepAlive）执行生产脚本（PORT=9642、HOST=0.0.0.0）；plist 模板入 `scripts/`，安装命令进 README。
-6. **im.json 细节**：`platforms` 数组飞书/钉钉共存；`approverUserId` 为平台侧用户标识，`approverName` 用于卡片结果态与 decidedBy 展示。
-7. **卡片按钮回调载荷**：编码 actionId + decision（accept/reject），适配层完成验签与解包后交纯函数处理。
-8. **定时扫描细节**：60 秒间隔；仅比对「目录最新期次 > lastPushedPeriod」才触发构建+推送；扫描只读文件名（轻量），看板访问触发的推送保留为兜底。
-9. **用户配合步骤（执行依赖）**：M4b 前需用户在飞书后台创建自建应用并提供 appId/appSecret/approverUserId 并真机配合 demo 实测；M4c 同理钉钉。tasks 中立显式任务项，届时等待用户输入。
-10. **前端留痕展示**：行动项状态旁次级文本「审批人 · MM-DD HH:mm」；无 decidedBy 时维持现状；跨周对照区结构不变。
+- 新增：SQLite 存储（node:sqlite）与四表 schema、报告身份=文件名、幂等抽取调度、卡片只推高优/高置信（防疲劳）、SDK 测试用合成回放、单次保护参数初值、演示回退保留、webhook 文本降级保留、旧 actions.json 不迁移。
+- 未改变或删减任何 proposal 决策。
+
+## GRILL 决议（2026-10-12，auto 模式自答，仅覆盖 proposal 留白）
+
+### 第 1 轮
+
+- **G1 报告文件名与日期**：不强制文件名含日期；报告身份 = 文件名 slug，展示排序按导入时间倒序；期次概念退化为"按报告组织"。（推荐采纳，理由：报告来源多样，强制日期约束收益低）
+- **G2 前端组件处置**：ConclusionCard/DerivationChain/MetricChart/ContributionChart/BreakdownTable/ActionSummary 及 demo 数据全部重写为行动闭环组件（ActionItemCard/TaskList/FeedbackForm/演示行动项）；**echarts 依赖随之移除**（无用代码不留）。（推荐采纳）
+- **G3 重抽语义**：`POST /api/reports/extract` 默认只处理"未成功抽取"的报告；`force:true` 重抽时，该报告下仍处 `suggested` 的行动项删除重建，`adopted/dismissed/有任务` 的保留。（推荐采纳，理由：保护已发生的决策与执行留痕）
+- **G4 反馈 score**：1-5 整数，5=显著正向效果，3=无明显变化，1=显著负向。（推荐采纳）
+- **G5 服务端文件处置**：`report/parseCsv`、`rules/`、`review.ts`、`actions.ts`(JSON 存储)、`dashboard.ts` 结论装配删除/重写；`notify.ts` 改造内容源（行动摘要）；`im.ts`/`im-feishu.ts` 机制保留、卡片构造适配行动项；`server/index.ts` 路由重排。测试文件同步重写。（推荐采纳）
+- **G6 环境事实**：Node v24.21.0，node:sqlite DatabaseSync 可用；本机 ~/.pi/agent/auth.json 存在（真实验证可行）。无需决策，记录为已验证。
+
+### 第 2 轮（第 1 轮决议引出的新问题）
+
+- **G7 演示数据形态**：无报告时 isDemo 演示行动项 = 固定 3 条样例（各覆盖一种证据等级），标注"演示数据"；无密钥但有报告时显示明确错误状态（不冒充演示）。（推荐采纳，区分"无输入"与"能力故障"）
+- **G8 notify-state 幂等键**：推送幂等键从"期次"改为"报告文件名 slug"，notify-state.json 结构不变、语义平移；手动重推端点保留"真正再发一轮"语义。（推荐采纳，复用已验证的幂等漏斗）
+- **G9 多报告并存**：看板默认聚合展示全部报告的行动项（报告名分组/过滤），不做单报告切换页——行动项量级（每周 ≤10）不需要。（推荐采纳）
+
+## UI-GATE 用户变更回灌（2026-10-12，第 1 轮，用户原话锚定）
+
+> 1- 驳回建议，需要有窗口输入理由
+> 2- 允许用户增加报告中提取的建议之外的其他建议
+> 以上两步相当于是用户在 teach 智能体分析结论的准确性，也帮助沉淀有用的决策
+
+### G10 驳回必填理由（弹窗输入）
+- 看板驳回行动项：点击「驳回」→ 弹出理由窗口（textarea 必填，≥2 字；确认/取消）→ 落库 `dismissedReason` + 驳回时间/渠道。
+- 飞书卡片驳回：保持单键直驳（移动端无输入成本），卡片渠道驳回 `dismissedReason` 记为「卡片驳回（未填理由）」，看板详情区提供**补填理由**入口（补充后覆盖）。
+- 语义定位（用户原话）：驳回理由 = 对抽取准确性的 teach 信号，是决策资产的一部分，必须沉淀可查。
+
+### G11 人工补充建议（报告外建议）
+- 看板提供「补充建议」入口：表单（标题必填、依据/理由必填、scene/lifecycle/priority/effort 可选）→ 创建 `sourceKind=manual` 的行动项，`reportId` 可空（过滤器归入「人工补充」分组）。
+- 人工项证据等级固定「经验假设」+ 依据文本入 evidence.reasoning，confidence 显示「人工」徽标（不参与派生公式）。
+- 人工项与抽取项同权走 确认→任务→反馈 闭环（manual 创建即 `suggested`，仍需采纳确认）。
+
+### G12 抽取校准注入（teach 回路，G10/G11 的兑现）
+- 抽取 prompt 注入近期校准上下文：最近 ≤10 条驳回理由（原文）+ 最近 ≤10 条人工补充建议标题与依据，作为「用户已判定的误报方向」与「用户关注的额外方向」提示模型。
+- 注入内容来自库内查询，不外传报告外新数据；无校准数据时不注入（prompt 形态不变）。
+
+### API 增量
+- `PATCH /api/actions/:id`：status→dismissed 时接受 `dismissedReason`（看板渠道必填校验；card 渠道默认值）；新增补填语义（仅 dismissed 项可补填）。
+- `POST /api/actions`：`sourceKind: extracted|manual`（manual 走 G11 校验），`reportId` 可空。
+- 表结构增量：`action_items` 增 `dismissed_reason`、`source_kind` 列；`report_id` 可空。
+
+### G13 三栏工作台布局（参考 report-factory UI，用户 UI-GATE 追加变更 #3）
+- 布局从单列居中改为三栏 shell：**左栏（固定窄栏）报告导航** + **主内容区（既定四区）** + **右栏（可开关抽屉）运行详情**。
+- 左栏内容：报告列表（报告名、导入时间、抽取状态点：待抽取/抽取中/已抽取/失败），固定项「全部」与「人工补充」；点击 = 主区过滤器按报告聚焦（与 S6 过滤器联动，非路由）。删除报告不提供（报告是磁盘文件事实源）。
+- 右栏「运行详情」（默认收起，顶栏按钮开关，参考 report-factory wb-drawer）：模型链状态（主备模型+密钥就绪 chip）、SDK 任务账本用量（模型调用次数、token 入/出、累计用时，来自 BudgetStore 快照）、抽取事件时间线（报告抽取开始/成功/失败+原因，来自审计/日志投影）。
+- 窄屏（<1080px）侧栏折叠为横向条，主区优先——可访问性顺序：主内容在前，侧栏在后（DOM 顺序）。
+
+### G14 布局变更对既有决议的平移
+- G9 多报告聚合展示不变：默认「全部」，左栏是聚焦器不是切换页。
+- 概览头 S1 的统计与通知 chip 保留在主区顶部；报告状态条 S1b 与左栏状态点同源（同一数据两处呈现，左栏精简、S1b 带操作按钮）。
+- max-width 860px 单列约定废止，改三栏自适应；Xanthil token/焦点环/卡片基线不变。
+
+
+## PRD 勘误（REVIEW 轮）
+
+- 「API」节的 `GET /api/health` 保留未扩展：模型链可用性信息实际位于 `GET /api/dashboard` 响应的 `modelChain` 字段（主/备 + keyReady），前端 S-R 抽屉与 S9 错误条同源消费。
+- `POST /api/actions` 仅创建人工补充项（sourceKind 恒为 manual、走 G11 校验）；`sourceKind: extracted|manual` 参数保留给读取侧语义，不由请求指定。

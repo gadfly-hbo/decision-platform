@@ -7,6 +7,12 @@ data/notify-state.json
 data/actions.json
 # M4 IM 自建应用凭证（appId/appSecret/审批人映射，不入库）
 data/im.json
+# M5 行动闭环 SQLite 库（运行期数据，不入库；PRD Further Notes）
+data/board.db
+# M5 SDK 任务账本与审计（运行期数据，不入库；README 部署节）
+data/agent-ledger.json
+data/agent-ledger.json.audit.jsonl
+data/agent-audit.jsonl
 data/prod.log
 .DS_Store
 # Playwright 截图产物（本地视觉核验输出）

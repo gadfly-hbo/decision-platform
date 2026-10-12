@@ -1,17 +1,16 @@
 /**
- * M4b 飞书适配器：LarkChannel 长连接（零公网入站，前置门实测通过 2026-09-27）。
- * 平台细节隔离在本文件：卡片 schema 翻译、cardAction → 纯函数落库 → updateCard。
+ * M5 飞书适配器：LarkChannel 长连接（零公网入站，前置门实测通过 2026-09-27）。
+ * 平台细节隔离在本文件：卡片 schema 翻译、cardAction → 行动项落库 → updateCard。
  * 单测经 channelFactory 注入 fake channel；真实 SDK 只在 e2e 手测。
  */
 import * as lark from '@larksuiteoapi/node-sdk'
-import { readActionStore, writeActionStore } from './actions'
+import type { BoardDb } from './db'
 import {
   handleApprovalCallback,
   type ApprovalCard,
   type ImPlatformConfig,
 } from './im'
 import type { ImPushChannel } from './notify'
-import { latestPeriodInDir } from './notify'
 
 export interface FeishuChannelLike {
   send(to: string, input: { text?: string; card?: object }): Promise<{ messageId: string }>
@@ -26,49 +25,48 @@ export interface CardActionLike {
   action: { value: unknown; tag: string }
 }
 
-const SEVERITY_TEMPLATE: Record<string, string> = { high: 'red', medium: 'orange', low: 'turquoise' }
-
-/** 平台无关卡片模型 → 飞书交互卡片 schema（按钮 value 编码 actionId+decision） */
+/** 平台无关卡片模型 → 飞书交互卡片 schema（正文 = 依据 + 证据摘要 + 预期效果；按钮 value 编码 itemId+decision） */
 export function feishuApprovalCard(card: ApprovalCard): object {
-  const attributionLines =
-    card.attribution.length > 0
-      ? card.attribution
-          .map((a) => `· ${a.dimension}　${a.contribution > 0 ? '+' : ''}${a.contribution}${a.delta ? `（${a.delta}）` : ''}`)
-          .join('\n')
-      : '· 无归因明细'
-  const actionButtons = card.actions.flatMap((a) => [
+  const confidenceText = card.confidence !== null ? `${Math.round(card.confidence * 100)}%` : '人工'
+  const metaLine = [`置信度 ${confidenceText}`, ...(card.evidenceLevel ? [`证据等级 ${card.evidenceLevel}`] : [])].join(' · ')
+  const elements: Array<Record<string, unknown>> = [
+    { tag: 'div', text: { tag: 'lark_md', content: `**依据**：${card.rationale}` } },
+    { tag: 'div', text: { tag: 'lark_md', content: metaLine } },
+  ]
+  if (card.topFactQuote) {
+    elements.push({ tag: 'div', text: { tag: 'lark_md', content: `**证据摘要**\n> ${card.topFactQuote}` } })
+  }
+  if (card.expectedImpact) {
+    elements.push({ tag: 'div', text: { tag: 'lark_md', content: `**预期效果**：${card.expectedImpact}` } })
+  }
+  elements.push(
+    { tag: 'hr' },
+    { tag: 'note', elements: [{ tag: 'plain_text', content: '决策看板 · 点击按钮即完成审批' }] },
     {
-      tag: 'button',
-      text: { tag: 'plain_text', content: `采纳：${a.text}`.slice(0, 20) },
-      type: 'primary',
-      value: { conclusionId: card.conclusionId, actionId: a.actionId, decision: 'accept', period: card.period },
+      tag: 'action',
+      actions: [
+        {
+          tag: 'button',
+          text: { tag: 'plain_text', content: '采纳' },
+          type: 'primary',
+          value: { itemId: card.itemId, decision: 'accept' },
+        },
+        {
+          tag: 'button',
+          text: { tag: 'plain_text', content: '驳回' },
+          type: 'danger',
+          value: { itemId: card.itemId, decision: 'reject' },
+        },
+      ],
     },
-    {
-      tag: 'button',
-      text: { tag: 'plain_text', content: '驳回' },
-      type: 'danger',
-      value: { conclusionId: card.conclusionId, actionId: a.actionId, decision: 'reject', period: card.period },
-    },
-  ])
+  )
   return {
     config: { wide_screen_mode: true },
     header: {
-      template: SEVERITY_TEMPLATE[card.severity] ?? 'grey',
-      title: { tag: 'plain_text', content: `【${card.severity === 'high' ? '高' : card.severity === 'medium' ? '中' : '低'}】${card.title}` },
+      template: 'turquoise',
+      title: { tag: 'plain_text', content: card.title.slice(0, 40) },
     },
-    elements: [
-      {
-        tag: 'div',
-        text: {
-          tag: 'lark_md',
-          content: `**决策依据**：${card.summary}\n**窗口** ${card.window} · 期次 ${card.period}`,
-        },
-      },
-      { tag: 'div', text: { tag: 'lark_md', content: `**归因 top 渠道**\n${attributionLines}` } },
-      { tag: 'hr' },
-      { tag: 'note', elements: [{ tag: 'plain_text', content: '决策看板 · 点击按钮即完成审批' }] },
-      { tag: 'action', actions: actionButtons },
-    ],
+    elements,
   }
 }
 
@@ -86,8 +84,8 @@ export function feishuResultCard(reply: string): object {
 
 export interface FeishuBridgeDeps {
   config: ImPlatformConfig
-  actionsFile: string
-  dataDir: string
+  /** M5：行动项事实源（board.db）；卡片回调直写行动项状态（与服务器共用同一连接） */
+  db: BoardDb
   /** 测试注入；默认真实 LarkChannel（长连接） */
   channelFactory?: () => Promise<FeishuChannelLike>
 }
@@ -111,16 +109,10 @@ export async function startFeishuBridge(deps: FeishuBridgeDeps): Promise<FeishuB
       } else if (evt.operator.openId !== deps.config.approverUserId) {
         reply = `非审批人操作，已拒绝（${evt.operator.name ?? evt.operator.openId}）`
       } else {
-        // currentPeriod=目录最新期次（时效校验，proposal §8）
-        const currentPeriod = latestPeriodInDir(deps.dataDir) ?? ''
-        const store = readActionStore(deps.actionsFile)
         const outcome = handleApprovalCallback(
           { ...asRecord(evt.action.value), operatorName: evt.operator.name ?? deps.config.approverName },
-          { store, period: currentPeriod, currentPeriod, now: new Date().toISOString() },
+          { db: deps.db },
         )
-        if (outcome.applied) {
-          writeActionStore(deps.actionsFile, outcome.store)
-        }
         reply = outcome.reply
         console.log(`[im:feishu] 审批回调 ${outcome.applied ? '落库' : '未落库'}：${reply}`)
       }

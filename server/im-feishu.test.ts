@@ -1,53 +1,82 @@
-import { cpSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { feishuApprovalCard, feishuResultCard, startFeishuBridge, type CardActionLike, type FeishuChannelLike } from './im-feishu'
-import { readActionStore } from './actions'
+import { closeBoardDb, createActionItem, getActionItem, openBoardDb, type BoardDb } from './db'
 import type { ApprovalCard } from './im'
 
 let dir = ''
+let db: BoardDb
+
 beforeAll(() => {
   dir = mkdtempSync(join(tmpdir(), 'dp-imfeishu-'))
 })
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
 
-/** dataDir 内放指定期次的样本 CSV（桥接回调按「目录最新期次」校验卡片时效） */
-function makeDataDir(period: string): string {
-  const d = mkdtempSync(join(tmpdir(), `dp-imfeishu-data-${period.replace(/-/g, '')}-`))
-  cpSync(join(__dirname, 'report/testdata', 'sample.csv'), join(d, `会员周报-${period}.csv`))
-  return d
-}
+beforeEach(() => {
+  db = openBoardDb(join(dir, `feishu-${Date.now()}-${Math.random().toString(36).slice(2)}.db`))
+})
+afterEach(() => {
+  try {
+    closeBoardDb(db)
+  } catch {
+    // 落库异常用例已主动关闭；重复 close 吞掉
+  }
+})
 
 const card: ApprovalCard = {
-  conclusionId: 'c-divergence',
-  severity: 'high',
-  title: '会员零售额同比 +8.8%，与大盘零售额 -5.9% 背离',
-  summary: '会员零售额逆势增长，与大盘方向相反，需确认增长质量。',
-  window: '09-12 ~ 09-25',
-  period: '2026-09-26',
-  attribution: [
-    { dimension: '加盟·A品牌-西南加盟', contribution: 42.1, delta: '+38%' },
-    { dimension: '直营·A品牌-华东直营', contribution: -18.6, delta: '-12%' },
-  ],
-  actions: [{ actionId: 'a-divergence-1', text: '核查会员逆势增长的结构质量', impact: '明确资源加减方向' }],
+  itemId: 'item-1',
+  title: '对沉睡会员发放阶梯券',
+  rationale: '会员复购率由 12% 降至 9%，建议以阶梯券激活沉睡会员。',
+  confidence: 0.92,
+  evidenceLevel: '数据支撑',
+  topFactQuote: '会员复购率由 12% 降至 9%',
+  topFactText: '复购率下滑',
+  expectedImpact: '30 日内复购率回升约 2pp',
 }
 
-test('feishuApprovalCard：schema 携带标题/依据/归因/按钮，value 编码 actionId+decision', () => {
+function seedItem(title: string): string {
+  return createActionItem(db, {
+    sourceKind: 'extracted',
+    reportId: null,
+    title,
+    rationale: '报告建议依据',
+    scene: null,
+    lifecycle: null,
+    expectedImpact: '预期效果',
+    priority: 'high',
+    effort: 'medium',
+    confidence: 0.92,
+    evidence: { facts: [{ text: '复购率下滑', quote: '会员复购率由 12% 降至 9%' }], level: '数据支撑', reasoning: 'r' },
+  })
+}
+
+test('feishuApprovalCard：schema 携带标题/依据/证据摘要（引用原文+等级+置信度）/预期效果，按钮 value 编码 itemId+decision', () => {
   const json = feishuApprovalCard(card) as {
-    header: { title: { content: string }; template: string }
+    header: { title: { content: string } }
     elements: Array<Record<string, unknown> & { tag?: string; actions?: Array<Record<string, unknown>>; text?: { content?: string } }>
   }
-  expect(json.header.title.content).toContain('【高】')
-  expect(json.header.title.content).toContain('背离')
+  expect(json.header.title.content).toContain('对沉睡会员发放阶梯券')
   const texts = json.elements.map((e) => e.text?.content ?? '').join('\n')
-  expect(texts).toContain('逆势增长')
-  expect(texts).toContain('加盟·A品牌-西南加盟')
-  expect(texts).toContain('2026-09-26')
+  expect(texts).toContain('会员复购率由 12% 降至 9%') // 依据 + 证据摘要引用原文
+  expect(texts).toContain('置信度 92%')
+  expect(texts).toContain('证据等级 数据支撑')
+  expect(texts).toContain('证据摘要')
+  expect(texts).toContain('30 日内复购率回升约 2pp') // 预期效果（契约 2.11）
   const action = json.elements.find((e) => e.tag === 'action')
   expect(action?.actions).toHaveLength(2)
   const values = action!.actions!.map((b) => b.value)
-  expect(values).toContainEqual({ conclusionId: 'c-divergence', actionId: 'a-divergence-1', decision: 'accept', period: '2026-09-26' })
-  expect(values).toContainEqual({ conclusionId: 'c-divergence', actionId: 'a-divergence-1', decision: 'reject', period: '2026-09-26' })
+  expect(values).toContainEqual({ itemId: 'item-1', decision: 'accept' })
+  expect(values).toContainEqual({ itemId: 'item-1', decision: 'reject' })
+})
+
+test('feishuApprovalCard：无引用 fact 时不渲染证据摘要块（不伪造引用）', () => {
+  const json = feishuApprovalCard({ ...card, topFactQuote: undefined }) as {
+    elements: Array<Record<string, unknown> & { text?: { content?: string } }>
+  }
+  const texts = json.elements.map((e) => e.text?.content ?? '').join('\n')
+  expect(texts).not.toContain('证据摘要')
+  expect(texts).toContain('预期效果') // 其余正文不受影响
 })
 
 test('feishuResultCard：结果态文案 + 无按钮', () => {
@@ -60,135 +89,20 @@ test('feishuResultCard：结果态文案 + 无按钮', () => {
   expect(json.elements.some((e) => e.tag === 'action')).toBe(false)
 })
 
-/* ---- 桥接：cardAction → 落库 → updateCard（fake channel，SDK 网络不进单测）---- */
+/* ---- 桥接：cardAction → 行动项落库 → updateCard（fake channel，SDK 网络不进单测）---- */
 
-interface SentItem {
-  to: string
-  input: { text?: string; card?: object }
-}
-
-test('startFeishuBridge：sendApproval 发文本+卡片；cardAction 落库留痕并更新卡片；重复回调提示已处理', async () => {
-  const actionsFile = join(dir, 'bridge-actions.json')
-  rmSync(actionsFile, { force: true })
-  const sent: SentItem[] = []
-  const updated: Array<[string, object]> = []
-  let cardHandler: ((evt: CardActionLike) => void | Promise<void>) | undefined
-  const fake: FeishuChannelLike = {
-    send: async (to, input) => {
-      sent.push({ to, input })
-      return { messageId: `om_${sent.length}` }
-    },
-    updateCard: async (messageId, card) => {
-      updated.push([messageId, card])
-    },
-    on: (name, handler) => {
-      if (name === 'cardAction') cardHandler = handler
-      return () => {}
-    },
-    disconnect: async () => {},
-  }
-
-  const bridge = await startFeishuBridge({
-    config: { platform: 'feishu', appId: 'cli_x', appSecret: 's', approverUserId: 'ou_approver', approverName: '黄博' },
-    actionsFile,
-    dataDir: makeDataDir('2026-09-26'),
-    channelFactory: async () => fake,
-  })
-
-  await bridge.sendApproval('【决策看板】周报摘要', [card])
-  expect(sent).toHaveLength(2) // 1 条文本摘要 + 1 张卡片
-  expect(sent[0].to).toBe('ou_approver')
-  expect(sent[0].input.text).toContain('周报摘要')
-  expect(sent[1].input.card).toBeDefined()
-
-  const evt = {
-    messageId: 'om_2',
-    operator: { openId: 'ou_approver' },
-    action: { value: { conclusionId: 'c-divergence', actionId: 'a-divergence-1', decision: 'accept', period: '2026-09-26' }, tag: 'button' },
-  }
-  await cardHandler!(evt)
-  const store = readActionStore(actionsFile)
-  expect(store['a-divergence-1']).toMatchObject({ status: 'accepted', decidedBy: '黄博', decidedVia: 'card' })
-  expect(updated).toHaveLength(1)
-  expect(updated[0][0]).toBe('om_2')
-  const replyText = JSON.stringify(updated[0][1])
-  expect(replyText).toContain('已采纳')
-  expect(replyText).toContain('黄博')
-
-  // 重复回调：store 不变，卡片更新为「已处理」提示（对平台重试幂等）
-  await cardHandler!(evt)
-  expect(readActionStore(actionsFile)['a-divergence-1'].updatedAt).toBe(store['a-divergence-1'].updatedAt)
-  expect(updated).toHaveLength(2)
-  expect(JSON.stringify(updated[1][1])).toContain('已处理')
-
-  await bridge.stop()
-})
-
-test('startFeishuBridge：非法载荷回调不落库', async () => {
-  const actionsFile = join(dir, 'bridge-bad-actions.json')
-  rmSync(actionsFile, { force: true })
-  let cardHandler: ((evt: CardActionLike) => void | Promise<void>) | undefined
-  const fake: FeishuChannelLike = {
-    send: async () => ({ messageId: 'om_1' }),
-    updateCard: async () => {},
-    on: (name, handler) => {
-      if (name === 'cardAction') cardHandler = handler
-      return () => {}
-    },
-    disconnect: async () => {},
-  }
-  const bridge = await startFeishuBridge({
-    config: { platform: 'feishu', appId: 'cli_x', appSecret: 's', approverUserId: 'ou_a', approverName: '黄博' },
-    actionsFile,
-    dataDir: makeDataDir('2026-09-26'),
-    channelFactory: async () => fake,
-  })
-  await cardHandler!({ messageId: 'om_1', operator: { openId: 'ou_a' }, action: { value: { decision: 'accept' }, tag: 'button' } })
-  expect(readActionStore(actionsFile)).toEqual({})
-  await bridge.stop()
-})
-
-test('startFeishuBridge：旧期次卡片（目录已有更新期次）不落库，卡片更新为过期提示', async () => {
-  const actionsFile = join(dir, 'bridge-stale-actions.json')
-  rmSync(actionsFile, { force: true })
-  const updated: Array<[string, object]> = []
-  let cardHandler: ((evt: CardActionLike) => void | Promise<void>) | undefined
-  const fake: FeishuChannelLike = {
-    send: async () => ({ messageId: 'om_1' }),
-    updateCard: async (messageId, card) => {
-      updated.push([messageId, card])
-    },
-    on: (name, handler) => {
-      if (name === 'cardAction') cardHandler = handler
-      return () => {}
-    },
-    disconnect: async () => {},
-  }
-  const bridge = await startFeishuBridge({
-    config: { platform: 'feishu', appId: 'cli_x', appSecret: 's', approverUserId: 'ou_a', approverName: '黄博' },
-    actionsFile,
-    dataDir: makeDataDir('2026-10-03'), // 目录已是更新期次
-    channelFactory: async () => fake,
-  })
-  await cardHandler!({
-    messageId: 'om_stale',
-    operator: { openId: 'ou_a' },
-    action: { value: { conclusionId: 'c-divergence', actionId: 'a-divergence-1', decision: 'accept', period: '2026-09-26' }, tag: 'button' },
-  })
-  expect(readActionStore(actionsFile)).toEqual({})
-  expect(updated).toHaveLength(1)
-  expect(JSON.stringify(updated[0][1])).toContain('已过期')
-  await bridge.stop()
-})
-
-/* ---- REVIEW cycle 1：身份校验与落库异常 ---- */
-
-function makeFakeChannel(captured: {
+interface Captured {
+  sent: Array<{ to: string; input: { text?: string; card?: object } }>
   updated: Array<[string, object]>
   cardHandler?: (evt: CardActionLike) => void | Promise<void>
-}): FeishuChannelLike {
+}
+
+function makeFakeChannel(captured: Captured): FeishuChannelLike {
   return {
-    send: async () => ({ messageId: 'om_1' }),
+    send: async (to, input) => {
+      captured.sent.push({ to, input })
+      return { messageId: `om_${captured.sent.length}` }
+    },
     updateCard: async (messageId, card) => {
       captured.updated.push([messageId, card])
     },
@@ -200,46 +114,81 @@ function makeFakeChannel(captured: {
   }
 }
 
-test('startFeishuBridge：非配置审批人点卡 → 拒绝回执不落库（MINOR-1）', async () => {
-  const actionsFile = join(dir, 'bridge-who-actions.json')
-  rmSync(actionsFile, { force: true })
-  const captured: { updated: Array<[string, object]>; cardHandler?: (evt: CardActionLike) => void | Promise<void> } = { updated: [] }
-  const bridge = await startFeishuBridge({
-    config: { platform: 'feishu', appId: 'cli_x', appSecret: 's', approverUserId: 'ou_approver', approverName: '黄博' },
-    actionsFile,
-    dataDir: makeDataDir('2026-09-26'),
-    channelFactory: async () => makeFakeChannel(captured),
-  })
+const CONFIG = { platform: 'feishu' as const, appId: 'cli_x', appSecret: 's', approverUserId: 'ou_approver', approverName: '黄博' }
+
+async function withBridge(captured: Captured, deps: Partial<Parameters<typeof startFeishuBridge>[0]> = {}) {
+  const bridge = await startFeishuBridge({ config: CONFIG, db, channelFactory: async () => makeFakeChannel(captured), ...deps })
+  return bridge
+}
+
+test('startFeishuBridge：sendApproval 发文本+卡片；cardAction 落库留痕并更新卡片；重复回调提示已按首次结果处理', async () => {
+  const captured: Captured = { sent: [], updated: [] }
+  const itemId = seedItem('对沉睡会员发放阶梯券')
+  const bridge = await withBridge(captured)
+
+  await bridge.sendApproval('【决策看板】行动闭环周摘要', [card])
+  expect(captured.sent).toHaveLength(2) // 1 条文本摘要 + 1 张卡片
+  expect(captured.sent[0].to).toBe('ou_approver')
+  expect(captured.sent[0].input.text).toContain('周摘要')
+  expect(captured.sent[1].input.card).toBeDefined()
+
+  const evt = {
+    messageId: 'om_9',
+    operator: { openId: 'ou_approver' },
+    action: { value: { itemId, decision: 'accept' }, tag: 'button' },
+  }
+  await captured.cardHandler!(evt)
+  expect(getActionItem(db, itemId)).toMatchObject({ status: 'adopted', decidedBy: '黄博', decidedVia: 'card' })
+  expect(captured.updated).toHaveLength(1)
+  const replyText = JSON.stringify(captured.updated[0][1])
+  expect(replyText).toContain('已采纳')
+  expect(replyText).toContain('对沉睡会员发放阶梯券')
+
+  // 重复回调（平台重试）：先到先得，不改库，卡片更新为已处理提示
+  await captured.cardHandler!(evt)
+  expect(getActionItem(db, itemId)?.status).toBe('adopted')
+  expect(captured.updated).toHaveLength(2)
+  expect(JSON.stringify(captured.updated[1][1])).toContain('已按首次点击结果处理')
+
+  await bridge.stop()
+})
+
+test('startFeishuBridge：非法载荷回调不落库', async () => {
+  const captured: Captured = { sent: [], updated: [] }
+  seedItem('任意行动项')
+  const bridge = await withBridge(captured)
+  await captured.cardHandler!({ messageId: 'om_1', operator: { openId: 'ou_approver' }, action: { value: { decision: 'accept' }, tag: 'button' } })
+  expect(captured.updated).toHaveLength(1)
+  expect(JSON.stringify(captured.updated[0][1])).toContain('审批请求无效')
+  await bridge.stop()
+})
+
+test('startFeishuBridge：非配置审批人点卡 → 拒绝回执不落库', async () => {
+  const captured: Captured = { sent: [], updated: [] }
+  const itemId = seedItem('仅审批人可操作')
+  const bridge = await withBridge(captured)
   await captured.cardHandler!({
     messageId: 'om_x',
     operator: { openId: 'ou_someone_else' },
-    action: { value: { conclusionId: 'c-divergence', actionId: 'a-divergence-1', decision: 'accept', period: '2026-09-26' }, tag: 'button' },
+    action: { value: { itemId, decision: 'accept' }, tag: 'button' },
   })
-  expect(readActionStore(actionsFile)).toEqual({})
-  expect(captured.updated).toHaveLength(1)
+  expect(getActionItem(db, itemId)?.status).toBe('suggested')
   const reply = JSON.stringify(captured.updated[0][1])
   expect(reply).toContain('非审批人')
   await bridge.stop()
 })
 
-test('startFeishuBridge：落库写入异常 → 不冒泡，卡片收到失败回执（MINOR-3）', async () => {
-  const notWritable = join(dir, 'bridge-notwritable') // 目录当 actionsFile：writeActionStore rename 失败
-  rmSync(notWritable, { recursive: true, force: true })
-  mkdirSync(notWritable)
-  const captured: { updated: Array<[string, object]>; cardHandler?: (evt: CardActionLike) => void | Promise<void> } = { updated: [] }
-  const bridge = await startFeishuBridge({
-    config: { platform: 'feishu', appId: 'cli_x', appSecret: 's', approverUserId: 'ou_a', approverName: '黄博' },
-    actionsFile: notWritable,
-    dataDir: makeDataDir('2026-09-26'),
-    channelFactory: async () => makeFakeChannel(captured),
-  })
+test('startFeishuBridge：落库异常（db 已关闭）→ 不冒泡，卡片收到失败回执', async () => {
+  const captured: Captured = { sent: [], updated: [] }
+  const itemId = seedItem('落库失败场景')
+  const bridge = await withBridge(captured)
+  closeBoardDb(db) // 制造写库异常
   await captured.cardHandler!({
     messageId: 'om_y',
-    operator: { openId: 'ou_a' },
-    action: { value: { conclusionId: 'c-divergence', actionId: 'a-divergence-1', decision: 'accept', period: '2026-09-26' }, tag: 'button' },
+    operator: { openId: 'ou_approver' },
+    action: { value: { itemId, decision: 'accept' }, tag: 'button' },
   })
   expect(captured.updated).toHaveLength(1)
   expect(JSON.stringify(captured.updated[0][1])).toContain('落库失败')
   await bridge.stop()
-  rmSync(notWritable, { recursive: true, force: true })
 })

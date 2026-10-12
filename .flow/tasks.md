@@ -1,148 +1,128 @@
-# 任务拆解 · M4 移动审批：飞书+钉钉卡片直审（内网单实例）
+# M5 任务拆分（tracer-bullet 垂直切片）
 
-> 来源：`.flow/prd.md`（含 GRILL 决议 1-10）；gated 拆解自批准（2026-09-27）。无 issue tracker，落盘 `.flow/tasks.md`。
+依据：`.flow/prd.md`（含 G1-G14）+ `.flow/ui-contract.md` v3。无 issue tracker，按 dev-flow 降级写本文件。
 
-- [x] 1. M4a-地基：静态文件服务 + 生产端口/环境变量 + launchd 模板 + README 部署节
-- [x] 2. M4a-留痕：ActionRecord decidedBy/decidedAt/decidedVia + 回滚清空 + PUT via=pc + 前端标注
-- [x] 3. M4a-推送触发独立化：60s 定时扫描纯函数 + wiring（KA1 修复）
-- [x] 4. IM 适配核心（平台无关）：im.json 配置 + 卡片数据结构纯函数 + 回调处理纯函数 + 文本降级
-- [x] 5. 飞书前置门（用户配合）：创建自建应用 + 内网 demo 实测发卡/收回调/更新卡（红队 KA2）——2026-09-27 三步实测通过，open_id 已解析回写
-- [x] 6. M4b-飞书卡片直审：SDK 长连接接入 + 定时扫描推送 high 卡片 + 回调落库 + 卡片结果态 + e2e——2026-09-27 真机 e2e 通过（自动推卡→手机采纳→留痕→看板同步）；补期次校验（旧期次卡片回执「已过期」不落库，proposal §8）；「服务停机窗口点击=未在线提示」为已知限制（launchd 常驻缓解），README 记录见任务 8
-- [x] 7. M4c-钉钉：**暂缓（2026-09-27 用户决策）**——适配器与前置门 demo 不做，im.json 的 dingtalk schema 与 IM 纯函数层已预留，移入 M5+ 候选；KA5 用户判定「敢」（卡片密度达标，档 2/B 层维持推迟）
-- [x] 8. 收尾：README 双机/安全/部署/M4 功能说明改写 + 全链路 e2e 走查（docs/m4-acceptance-walkthrough.md，sample 期次代真实周报，下期真实导入时回归）+ 演示数据回归（152/152）
+## 切片总览（依赖与故事覆盖）
+
+- [x] 1. SDK 适配层与抽取 Worker
+- [x] 2. SQLite 存管与报告抽取管线
+- [x] 3. 行动闭环 API（确认/驳回理由/人工补充/任务/反馈）
+- [x] 4. 工作台前端（三栏壳+行动项列表+证据）与新 dashboard，旧管线退役
+- [x] 5. 任务/反馈/补充建议 UI 与驳回弹窗
+- [x] 6. 飞书审批适配、推送调度与校准注入
+- [x] 7. 运行详情抽屉与收尾（README/文档）
+
+依赖链：1→2→3→{4,6}；4→5；4+1→7。每片完成 = `npm run verify` 绿 + 片内验收可演示。
 
 ---
 
-## 1. M4a-地基：静态文件服务 + 生产运行形态
+## 1. SDK 适配层与抽取 Worker
 
 ### What to build
-
-后端同端口服务前端构建产物：`dist/` 存在时 `GET /` 返回 index.html、未知非 API 路径 SPA fallback、`/api` 路由优先且行为不变；`dist/` 不存在时行为完全不变（本地开发照旧）。环境变量 `PORT`/`HOST` 生效（生产 9642 / 0.0.0.0，开发默认 8642 / 127.0.0.1 不变）。提供生产启动脚本（build + tsx 起 server）、launchd LaunchAgent plist 模板（RunOnLoad + KeepAlive）与安装命令，README 新增「内网单实例部署」节（端口、局域网访问地址、睡眠设置建议、安全边界改写：仅可信局域网、禁止端口映射公网）。
+业务代码唯一触达 `pi-agent-runtime`（vendored `file:vendor/pi-agent-runtime-0.4.1.tgz`）的适配层：模型链（MiniMax-M3 主 + mimo-v2.6-flash 备，密钥环境变量优先、缺省读 `~/.pi/agent/auth.json`，缺密钥降级不抛）、JSONL 审计 sink（append 即持久确认、失败上抛）、文件持久任务账本 BudgetStore（同任务唯一 lease、配置签名、重启不清账、`cumulative:'unlimited'` + 单次保护参数：maxOutputTokens 8192 / modelTimeoutMs 120s / controlTimeoutMs 30s）、本地授权策略（model/publish 放行、无工具）。其上封装 `runExtraction(reportText, calibration?) → ActionItemDraft[]`：`createRuntime` + `runWorker`，prompt 对齐 pi-xanthil Actions（严格 JSON、quote 逐字、证据降级、空数组兜底、G12 校准注入位），validator = 归一化纯函数（JSON 数组提取与宽松修复、scene/lifecycle/priority/effort 枚举、evidence 结构化与四级降级、confidence 派生公式 base(level)+quote 加成/无 facts 封顶 0.5、占位拒绝）。
 
 ### Acceptance criteria
-
-- [ ] 注入 tmpdir 起 server：`dist` 存在时 `GET /` 返回 200 HTML、`GET /some/route` SPA fallback、`/api/health` 等路由不受影响
-- [ ] `dist` 不存在时所有既有路由行为与现状一致（无静态逻辑干扰）
-- [ ] `PORT`/`HOST` 环境变量在启动入口生效
-- [ ] plist 模板 + 生产脚本可执行；README 部署节含安装与睡眠建议
-- [ ] `npm run verify` 全绿
+- [ ] 归一化纯函数单测：合法/宽松 JSON（注释/尾逗号）、枚举非法值降级、evidence 缺失降级经验假设、confidence 公式边界（0.9/0.75/0.55/0.3 + quote 加成上限 +0.1、无 facts 封顶 0.5）、空数组与占位拒绝、输入裁剪与脱图
+- [ ] `runExtraction` 用 `pi-agent-runtime/testing` `createReplay` 合成 transport 离线测：正常抽取、模型输出坏 JSON 抛错语义、备用链切换
+- [ ] 账本/审计行为测试：同任务二次 lease 拒绝、审计写失败关闭准入（注入失败 sink）、密钥缺失时 `modelChainAvailable()=false` 不抛
+- [ ] `npm run verify` 绿
 
 ### Blocked by
-
 None - can start immediately
 
-## 2. M4a-留痕：审批人字段贯穿存储/API/前端
+---
+
+## 2. SQLite 存储与报告抽取管线
 
 ### What to build
-
-行动记录新增可选字段 `decidedBy`/`decidedAt`/`decidedVia`（card|pc）：状态机更新时按渠道写入（卡片回调路径传审批人名；HTTP PUT 固定 `via='pc'`、忽略请求体中任何 decided* 字段防伪造，GRILL 决议 2）；状态回滚到 pending 时三者清空；历史记录无此字段时向后兼容。PC 看板行动项在状态旁展示「审批人 · MM-DD HH:mm」次级文本（无 decidedBy 时维持现状），跨周对照区结构不变。
+`node:sqlite` 单文件库（`data/board.db`，路径可注入）：`reports`（slug 身份、文件名、导入时间、status: pending/extracting/done/failed）、`action_items`（含 `source_kind extracted|manual`、`report_id` 可空、`dismissed_reason`、evidence_json/evidence_level、confidence、审批留痕 decided_by/at/via）、`action_tasks`（外键级联）、`action_feedback`（一任务一条）。报告扫描：`data/raw/` 下 `.md/.txt` → 注册/更新 reports（未处理才触发）。手动抽取端点 `POST /api/reports/extract`（默认处理未成功报告；`force:true` 按 G3 语义删除重建 suggested、保留已决/有任务项）与 `GET /api/reports`。抽取失败落 failed 状态与原因，可重试。SDK runner 经 ServerOptions 注入（测试用假 runner，不调真实模型）。
 
 ### Acceptance criteria
-
-- [ ] 纯函数：带 decided* 的 patch 更新、回滚 pending 清空、旧记录兼容、非法 via 拒绝
-- [ ] HTTP PUT：请求体含 decidedBy/decidedVia 时被忽略不落库
-- [ ] 前端渲染契约：有留痕展示「审批人 · 时间」，无留痕不渲染该文本
-- [ ] 既有 119+ 测试不回归；`npm run verify` 全绿
+- [ ] 存储单测：四表 CRUD、外键级联、evidence_json 往返、可空 report_id（人工项）
+- [ ] 报告管线测试：新报告注册、同文件不重复注册、已 done 不自动重抽、force 重抽保留 adopted/dismissed/有任务项、失败可重试
+- [ ] HTTP 测试（注入假 runner + 临时库）：extract 触发与状态迁移、无报告 400、runner 抛错落 failed
+- [ ] `npm run verify` 绿
 
 ### Blocked by
+- 1（runExtraction 缝）
 
-None - can start immediately
+---
 
-## 3. M4a-推送触发独立化（红队 KA1）
+## 3. 行动闭环 API（确认/驳回理由/人工补充/任务/反馈）
 
 ### What to build
-
-推送不再依赖有人打开看板：服务进程内 60 秒定时扫描周报目录（纯函数：目录 → 最新期次；仅文件名比对，轻量），发现「最新期次 > lastPushedPeriod」时执行构建+幂等推送（GRILL 决议 1：文本+卡片整体成功才落状态，失败下轮全量重试）；看板访问触发的推送保留为兜底。定时器为薄 wiring，不进单测；真实触发路径 e2e 手测（导入周报后不打开看板，等推送）。
+行动项全生命周期端点：`GET /api/dashboard`（聚合：报告列表+状态、行动项统计、全量行动项含任务与反馈、通知状态、模型链可用性——新形状）、`POST /api/actions`（manual 走 G11 校验：标题/依据必填、evidence 固定经验假设+reasoning=依据、source_kind=manual）、`PATCH /api/actions/:id`（status 迁移 suggested→adopted/dismissed；驳回携带 dismissedReason 必填 ≥2 字（看板渠道）；卡片渠道默认「卡片驳回（未填理由）」；仅 dismissed 可补填且仅默认值可覆盖——G10 语义；decided_by/at/via 留痕）、`GET/POST /api/actions/:id/tasks`、`PATCH /api/tasks/:id`（todo/doing/done、owner、dueDate、priority、note）、`POST/GET /api/tasks/:id/feedback`（一任务一条：adopted/outcome/metricDelta/review/score 1-5 整数）。旧 `/api/actions` JSON 存储与 `PUT /api/actions/:id` 端点保留至切片 4 退役。
 
 ### Acceptance criteria
-
-- [ ] 纯函数：fixture 目录多期 CSV → 正确最新期次；空目录/无有效文件 → null 不触发
-- [ ] 纯函数：期次比较与幂等门语义（≤ lastPushedPeriod 跳过）
-- [ ] server 启动即挂扫描定时器、关闭时不泄漏（server.close 后 timer 清理）
-- [ ] `npm run verify` 全绿
+- [ ] dashboard 聚合测试：多报告混合（含人工项）统计正确、无报告时 demo 回退标志、无密钥状态
+- [ ] 确认/驳回测试：正常迁移、驳回缺理由 400、理由 <2 字 400、补填覆盖仅限卡片默认值、重复驳回幂等
+- [ ] 人工补充测试：必填校验、证据等级固定、归组、sourceKind 标记
+- [ ] 任务/反馈测试：CRUD、一任务一条反馈（重复 POST 覆盖或 409——按实现钉死并在测试注明）、score 边界
+- [ ] 负向：不存在 id 404、非法 body 400
+- [ ] `npm run verify` 绿
 
 ### Blocked by
+- 2
 
-None - can start immediately
+---
 
-## 4. IM 适配核心（平台无关纯函数层）
+## 4. 工作台前端（三栏壳+行动项列表+证据）与新 dashboard，旧管线退役
 
 ### What to build
-
-`data/im.json` 读取校验（platforms 数组：platform/appId/appSecret/approverUserId/approverName，损坏按未配置处理，沿 notify.json 惯例）。卡片数据结构生成纯函数：Conclusion → 卡片模型（严重度+标题、关键数字、summary 全文、归因 top 3 渠道行、按钮 accept/reject 编码 actionId，KA5 文案结构）。回调处理纯函数：回调载荷（actionId+decision+操作者）+ 当前 store → 新 store（复用行动状态机+留痕，先到先得）+ 回执文案（成功结果态/已被处理提示/非法载荷拒绝）。平台差异只体现在适配器层，本切片零网络依赖。
+按 UI 契约 v3 重写前端：三栏 shell（S-L 报告导航 / 主区 S1 概览头+S1b 报告状态条+S6 过滤器+S2 行动项卡片流（S3 证据展开、四级色标、quote 块、警示语）/ S7-S10 演示·空·错误·加载态；右栏占位到切片 7）。token 增补（navy 对、scrim）落 tokens.css。同时完成后端旧管线退役：删除 `server/report/`、`server/rules/`、`server/review.ts`、JSON actions 存储、旧 dashboard 装配与 `/api/dashboard` 旧形状、前端 ConclusionCard/DerivationChain/MetricChart/ContributionChart/BreakdownTable/旧 demo、echarts 依赖。`data/raw/` 旧 CSV 不再读取（文件保留）。通知 chip 数据源接新 dashboard。
 
 ### Acceptance criteria
-
-- [ ] im.json 读取：合法/缺失/损坏/字段非法四态
-- [ ] 卡片模型：真实 M2 结论 fixture → 含全部文案要素与按钮编码；归因不足 3 行时取实际行数
-- [ ] 回调处理：accept/reject 落库+留痕、重复回调返回已被处理回执且 store 不变、非法 actionId/decision 拒绝
-- [ ] `npm run verify` 全绿
+- [ ] 组件测试（沿用 App.test.tsx 注入 data 缝）：三栏渲染、行动项卡与证据展开、四级色标 chip、过滤器四维、演示态 chip、空态、错误态（无密钥/抽取失败）、加载 aria-live
+- [ ] 旧形态清除验证：`rg -n "echarts|ConclusionCard|DerivationChain|MetricChart|parseCsv|buildConclusions" src server` 无产品代码命中（测试夹具除外）；package.json 无 echarts
+- [ ] 手动浏览器走查：真实报告（假 runner 或真实）→ 看板呈现行动项（截图留 `.flow/ui/` 或记录于 verify 证据）
+- [ ] `npm run verify` 绿（旧测试文件随旧实现删除，新测试覆盖新行为）
 
 ### Blocked by
+- 3
 
-2（留痕字段与状态机语义）
+---
 
-## 5. 飞书前置门（用户配合，红队 KA2）
+## 5. 任务/反馈/补充建议 UI 与驳回弹窗
 
 ### What to build
-
-用户在飞书开放平台创建免费企业 + 企业自建应用（机器人能力、卡片交互、消息权限、长连接事件订阅），把 appId/appSecret/审批人 userId 填入 `data/im.json`。随后内网 demo 实测：官方 Node SDK 长连接向审批人手机发一张带按钮卡片 → 点按钮本机收到回调 → 回调内更新卡片为结果态。**本任务是用户配合步骤：flow 将等待用户提供凭证与真机测试结果，实测不通则按红队 KA2 kill criterion 升级重议。**
+UI 契约 S4/S5/S11/S12/S13：采纳项卡内任务列表（新增/编辑 owner、截止日、状态 todo/doing/done 单选）、反馈表单↔只读块互斥（一任务一条）、驳回理由弹窗（`<dialog>`+showModal、textarea 必填 ≥2 字、焦点管理、Esc 取消、错误文案逐字）、卡片渠道驳回的详情区补填输入、过滤器区「补充建议」表单（标题\*/依据\*+四枚可选下拉）与人工项卡片（「人工」徽标、经验假设灰、固定说明行、人工补充分组）。
 
 ### Acceptance criteria
-
-- [ ] `data/im.json` 存在合法飞书配置（不入库）
-- [ ] demo 三步实测通过：发卡 / 收按钮回调 / 更新卡片（纯内网，无公网入站）
+- [ ] 组件测试：弹窗打开聚焦/校验/Esc 取消/确认落库、补填仅 dismissed+默认理由可见、人工项渲染与分组、任务三态单选、反馈互斥切换
+- [ ] 端到端组件流：采纳→拆任务→完成任务→回录反馈（注入 data 走 UI 状态）
+- [ ] `npm run verify` 绿
 
 ### Blocked by
+- 4
 
-None - can start immediately（与 1-4 并行）
+---
 
-## 6. M4b-飞书卡片直审
+## 6. 飞书审批适配、推送调度与校准注入
 
 ### What to build
-
-飞书适配器接入（官方 Node SDK 长连接）：定时扫描（切片 3）发现新期次时——high 结论逐条发交互卡片给审批人单聊（卡片模型来自切片 4，飞书 schema 翻译）+ 其余结论文本摘要（沿 M3 digest，经应用消息或群机器人降级）；卡片按钮回调经验签解包交切片 4 纯函数落库，随后更新卡片为结果态（失败 best-effort 记日志，GRILL 决议 4）；SDK 初始化失败/发送失败回落文本摘要并记日志。e2e：真实周报导入 → 不打开看板 → 手机收卡 → 采纳 → 卡片变结果态 → PC 看板同步。
+保留 im.ts/im-feishu.ts 长连接/幂等/留痕机制，审批对象改行动项：卡片=行动项+证据摘要（top quote+等级+置信度）+预期效果，按钮 采纳→adopted / 驳回→dismissed（单键直驳、理由默认值、留痕 decidedVia=card、旧报告卡片过期拒绝、重复点击幂等）。推送漏斗改造：调度器扫描 data/raw/ → 新报告抽取（真实 runExtraction）→ 高优（priority=high）或高置信（数据支撑级）逐条推卡片 + 其余文本摘要；未配置飞书回落群机器人 webhook 文本摘要；幂等键改报告 slug（notify-state 语义平移）；`POST /api/notify/push` 手动重推与 `/api/notify/test` 保留。G12 校准注入：抽取 prompt 注入最近 ≤10 条驳回理由 + ≤10 条人工补充（标题+依据），无数据不注入。周摘要 buildWeeklyDigest 改为行动闭环摘要（本周报告 N 份、建议 X 采纳 Y、任务完成 Z）。
 
 ### Acceptance criteria
-
-- [ ] 适配器接口（发卡/收回调/更新卡）实现且平台细节被隔离在适配层内
-- [ ] 端到端手测全链路通过并记录走查（docs/）
-- [ ] 卡片文案用 M2 真实结论自验 KA5（「敢拍板」）；不成立则升级而非静默改分期
-- [ ] 未配置/失败降级路径可用；`npm run verify` 全绿
+- [ ] 卡片构造测试：行动项→卡片字段映射、证据摘要、结果态留痕（沿用 im-feishu.test.ts 模式）
+- [ ] 漏斗测试（假 channel + 假 runner）：新报告触发一次推送（幂等）、失败报告不推、手动重推真发、高优过滤（低优不占卡片）、webhook 降级路径
+- [ ] 校准注入测试：有驳回/人工数据时 prompt 含校准段、无数据 prompt 形态不变
+- [ ] `npm run verify` 绿
 
 ### Blocked by
+- 3（行动项状态迁移与留痕）
 
-3（触发）、4（卡片/回调纯函数）、5（前置门通过）
+---
 
-## 7. M4c-钉钉卡片直审（含前置门，红队 KA4）
+## 7. 运行详情抽屉与收尾
 
 ### What to build
-
-先用用户创建的钉钉企业内部应用实测 Stream 模式卡片按钮回调（demo 同切片 5 三步）；通过 → 按切片 6 同样接口实现钉钉 Stream 适配器（复用切片 4 纯函数与推送策略，双平台共存按配置分别推送）；实测失败 → 钉钉按 proposal §8 降级为文本摘要，在 tasks 记录范围收窄，flow 不中止。
-
-### Acceptance criteria
-
-- [ ] 前置门实测结论显式记录（通过/降级）
-- [ ] 通过：双平台共存 e2e（同一期次按配置各自推送、回调各自落库同一事实源）
-- [ ] 降级：钉钉仅文本摘要且配置校验明确提示能力边界
-- [ ] `npm run verify` 全绿
-
-### Blocked by
-
-6（适配层接口稳定）
-
-## 8. 收尾：文档与全链路 e2e
-
-### What to build
-
-README 全面改写：内网单实例部署节（切片 1 已建）补充双机说明改写（Mac mini=生产唯一事实源、MacBook=纯开发机、data/*.json 不随 git）、推送与审批链路说明、mac mini 睡眠取舍明示。真实周报全链路 e2e 走查记录入 docs/（导入→自动推送→卡片审批→PC 同步→跨周对照含留痕）。演示数据回归确认（M1 数字自洽契约不受影响）。
+UI 契约 S-R：右栏抽屉（S1 开关钮、默认收起、非模态）——模型链状态（主备+密钥就绪 chip，来自 /api/health 扩展）、任务账本用量 chips（模型调用/token 入出/用时，BudgetStore 快照投影端点）、抽取事件时间线（reports 状态迁移+失败原因投影）。收尾：README 重写（M5 形态、报告输入说明、SDK 接入说明、部署不变）、启动脚本核对、`启动决策看板.command` 冒烟。
 
 ### Acceptance criteria
-
-- [ ] README 双机/安全/部署说明与实际行为一致
-- [ ] e2e 走查文档落 docs/，覆盖全链路含异常路径（重复点击、未配置降级）
-- [ ] 演示数据回归通过；`npm run verify` 全绿
+- [ ] 抽屉组件测试：开关、默认收起、数据渲染（用量/时间线/模型链）、空时间线文案逐字
+- [ ] 账本投影端点测试：假账本注入返回快照
+- [ ] README 与实际行为一致（走查记录）
+- [ ] `npm run verify` 绿；`npm run prod` 构建+静态服务冒烟通过
 
 ### Blocked by
-
-6、7（主链路完成）
+- 4（壳）、1（账本数据源）

@@ -1,107 +1,133 @@
-/** 严重度：high = 今天要拍板 / medium = 本周关注 / low = 观察项 */
-export type Severity = 'high' | 'medium' | 'low'
+/**
+ * M5 行动闭环共享域类型：前端与 server 共用的唯一类型源。
+ * server 侧（agent/types、db、board）经各自模块 re-export，方向保持 server → src。
+ */
 
-/** 行动状态：pending 待定 / accepted 采纳 / rejected 驳回 / executed 已执行（M3） */
-export type ActionStatus = 'pending' | 'accepted' | 'rejected' | 'executed'
+export type ReportStatus = 'pending' | 'extracting' | 'done' | 'failed'
+export type ActionItemStatus = 'suggested' | 'adopted' | 'dismissed'
+export type ActionTaskStatus = 'todo' | 'doing' | 'done'
 
-/** 指标定义——定义一次、全局引用（指标层原则的最小落地） */
-export interface MetricDef {
-  id: string
-  name: string
-  unit: string
-  /** 口径说明，看板可直接展示 */
-  caliber: string
-  format: 'percent' | 'currency' | 'number' | 'x'
-}
+export type ActionScene = '开业' | '日常' | '假日' | '大促'
+export type ActionLifecycle = 'A获取' | 'A激活' | 'R培育' | 'R复购' | 'R裂变'
+export type ActionLevel = 'high' | 'medium' | 'low'
+export type ActionEvidenceLevel = '数据支撑' | '多源佐证' | '逻辑推断' | '经验假设'
 
-export interface MetricPoint {
-  /** 日期标签：演示数据为 MM-DD；真实周趋势为期次 YYYY-MM-DD（M3） */
-  date: string
-  value: number
-}
-
-/** 基准/阈值线：threshold 止损线 / target 目标 / comparison 对比期 */
-export interface MetricBaseline {
-  kind: 'threshold' | 'target' | 'comparison'
-  label: string
-  value: number
-}
-
-export interface MetricSeries {
-  metricId: string
-  points: MetricPoint[]
-  baselines: MetricBaseline[]
-}
-
-/** 推导步骤类型：detection 检测 → attribution 归因 → rule 规则匹配 → suggestion 建议 */
-export type DerivationKind = 'detection' | 'attribution' | 'rule' | 'suggestion'
-
-export interface DerivationStep {
-  kind: DerivationKind
+export interface ActionEvidenceFact {
   text: string
+  /** 报告原文逐字引用；无则为 undefined */
+  quote?: string
 }
 
-/** 归因明细行：contribution 为对指标偏离的贡献，正 = 推高，负 = 拉低 */
-export interface BreakdownRow {
-  dimension: string
-  contribution: number
-  value: number
-  /** 相对变化的展示说明，如 "-38%" */
-  delta?: string
+export interface ActionEvidence {
+  facts: ActionEvidenceFact[]
+  level: ActionEvidenceLevel
+  reasoning: string
 }
 
-export interface SuggestedAction {
-  id: string
-  conclusionId: string
-  /** 动作一句话 */
-  text: string
-  /** 预期影响 */
-  impact: string
-}
-
-/** 跨周行动对照条目（M3：后端装配，前端只渲染） */
-export interface ActionReviewItem {
-  actionId: string
-  text: string
-  status: ActionStatus
-  executedNote?: string
-  period: string
-  thisWeek: string
-}
-
-/** 结论（决策卡）：一句话说清什么指标、偏离多少、大概什么原因 */
-export interface Conclusion {
-  id: string
-  severity: Severity
-  /** 渠道/交叉类结论的归因维度（运营模式·二级渠道），供跨周对照匹配 */
-  dimension?: string
-  title: string
-  summary: string
-  /** 数据窗口，如 '09-12 ~ 09-25' */
-  window: string
+export interface ReportRecord {
+  id: number
+  slug: string
+  filename: string
+  status: ReportStatus
+  error: string | null
+  importedAt: string
   updatedAt: string
-  metricIds: string[]
-  derivation: DerivationStep[]
-  breakdown: BreakdownRow[]
-  actions: SuggestedAction[]
 }
 
-export interface DashboardData {
+export interface ActionItemRecord {
+  id: string
+  reportId: number | null
+  sourceKind: 'extracted' | 'manual'
+  title: string
+  rationale: string
+  scene: string | null
+  lifecycle: string | null
+  expectedImpact: string
+  metricRef: string | null
+  priority: string
+  effort: string
+  confidence: number | null
+  evidence: ActionEvidence | null
+  evidenceLevel: string | null
+  status: ActionItemStatus
+  dismissedReason: string | null
+  decidedBy: string | null
+  decidedAt: string | null
+  decidedVia: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ActionTaskRecord {
+  id: string
+  actionItemId: string
+  title: string
+  owner: string | null
+  dueDate: string | null
+  status: ActionTaskStatus
+  priority: string
+  note: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ActionFeedbackRecord {
+  taskId: string
+  adopted: boolean
+  outcome: string
+  metricDelta: string
+  review: string
+  score: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ActionFeedbackView {
+  adopted: boolean
+  outcome: string
+  metricDelta: string
+  review: string
+  score: number
+  updatedAt: string
+}
+
+export interface ActionTaskView extends ActionTaskRecord {
+  feedback?: ActionFeedbackView
+}
+
+export interface ActionItemView extends ActionItemRecord {
+  tasks: ActionTaskView[]
+}
+
+export interface BoardStats {
+  suggested: number
+  adopted: number
+  dismissed: number
+  manual: number
+}
+
+export interface ModelChainProvider {
+  role: '主' | '备'
+  provider: string
+  modelId: string
+  keyReady: boolean
+}
+
+export interface BoardView {
   title: string
   lede: string
-  window: string
-  updatedAt: string
-  metrics: MetricDef[]
-  series: MetricSeries[]
-  conclusions: Conclusion[]
-  /** true = 演示数据回退（无真实数据或解析失败时置位，前端据此标注） */
-  isDemo?: boolean
-  /** 数据期次（真实数据来自周报文件名，如 2026-09-26） */
-  period?: string
-  /** 跨周行动对照（M3） */
-  actionReview?: ActionReviewItem[]
-  /** 历史期数（M3：趋势数据基础；<2 期时 series 为空走降级） */
-  historyCount?: number
-  /** 推送状态（M3：后端装配） */
-  notify?: { configured: boolean; lastPushedPeriod?: string }
+  reports: ReportRecord[]
+  actionItems: ActionItemView[]
+  stats: BoardStats
+  /** 推送状态（S1 通知 chip 四态数据源，契约 2.1） */
+  notify: {
+    /** webhook 或 IM 任一已配置 */
+    configured: boolean
+    /** IM（飞书）通道是否配置；未配置但 webhook 已配置 → 文本摘要降级提示 */
+    imConfigured?: boolean
+    /** 最近成功推送的报告 slug（来自 notify-state pushedSlugs 最新值） */
+    lastPushedReport?: string
+  }
+  modelChain: { available: boolean; providers: ModelChainProvider[] }
+  isDemo: boolean
 }

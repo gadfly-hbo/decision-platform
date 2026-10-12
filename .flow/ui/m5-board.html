@@ -1,0 +1,1235 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M5 UI 契约产物 — 报告驱动行动闭环看板（静态示例，非产品界面）</title>
+<style>
+/* ===== Token：逐字取自 src/styles/tokens.css（勿在组件中硬编码色值） ===== */
+:root {
+  --bg: #eceae5;
+  --surface: #ffffff;
+  --surface-2: #f4f3ef;
+  --soft: #f7f6f2;
+  --border: #e5e2dc;
+  --border-strong: #d8d3cb;
+  --text: #1d2027;
+  --text-2: #6f7480;
+  --text-3: #8a8076;
+
+  --accent: #e8643a;
+  --accent-strong: #bf4927;
+  --accent-soft: #fff1e8;
+  --accent-line: #e8c1b4;
+  --navy: #263442;
+
+  --ok: #176247;
+  --ok-soft: #def3e9;
+  --ok-line: #bfddcf;
+  --warn: #855211;
+  --warn-soft: #fff1d6;
+  --warn-line: #f0dfc2;
+  --fail: #952f2f;
+  --fail-soft: #ffe5e5;
+  --fail-line: #f3caca;
+  --queue: #6d5bd0;
+  --queue-ink: #5b48c0;
+  --queue-soft: #efecfb;
+  --queue-line: #d9d2f5;
+
+  --font-sans: Inter, ui-sans-serif, -apple-system, "SF Pro Text", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+
+  --fs-page-title: 22px;
+  --fs-view-title: 17px;
+  --fs-card-title: 13.5px;
+  --fs-body: 13px;
+  --fs-small: 11.5px;
+  --fs-meta: 10.5px;
+
+  --r-base: 14px;
+  --r-sm: 8px;
+  --r-pill: 999px;
+
+  --sp-xs: 4px;
+  --sp-sm: 6px;
+  --sp-md: 10px;
+  --sp-lg: 14px;
+  --sp-xl: 22px;
+
+  --shadow-card: 0 3px 12px rgba(40, 36, 30, 0.04);
+  --focus-ring: 3px solid rgba(232, 100, 58, 0.28);
+
+  /* 契约 6.1 增补（共三枚）：多源佐证（蓝）soft/line 对由 --navy 派生；--scrim 为 G10 弹窗遮罩，由 --text 派生 */
+  --navy-soft: #e8edf2;
+  --navy-line: #c9d4de;
+  --scrim: rgba(29, 32, 39, 0.32);
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--fs-body);
+  line-height: 1.6;
+}
+button { font: inherit; }
+:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
+
+/* ===== 三栏工作台 shell（G13/G14；DOM 顺序 = 主区在前、侧栏在后，视觉列位由 grid 控制） ===== */
+.workbench {
+  max-width: 1400px; margin: 0 auto; padding: var(--sp-xl);
+  display: grid; grid-template-columns: 240px minmax(0, 1fr) 300px;
+  gap: var(--sp-lg); align-items: start;
+}
+.wb-main { grid-column: 2; min-width: 0; }
+.side-nav { grid-column: 1; }
+.run-drawer { grid-column: 3; }
+/* 窄屏 <1080px：三栏解除，DOM 顺序即视觉顺序（主区最前）；左栏折为横向条（契约 1 节约定） */
+@media (max-width: 1080px) {
+  .workbench { grid-template-columns: 1fr; }
+  .wb-main, .side-nav, .run-drawer { grid-column: 1; }
+  .side-nav { position: static; display: flex; align-items: center; gap: var(--sp-sm); overflow-x: auto; }
+  .side-nav .side-title, .side-nav .side-group { margin: 0; white-space: nowrap; }
+  .side-nav .side-item { white-space: nowrap; flex-shrink: 0; }
+  .run-drawer { position: static; }
+}
+
+/* 主区容器（v1 的 .app 860px 单列约定废止，G14） */
+.app { margin: 0; padding: 0; max-width: none; }
+.page-title { margin: 0; font-size: var(--fs-page-title); font-weight: 600; line-height: 1.3; }
+.overview-head-row { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--sp-md); flex-wrap: wrap; }
+.overview-lede { margin: var(--sp-sm) 0 0; color: var(--text-2); }
+.overview-meta { margin: var(--sp-xs) 0 0; color: var(--text-3); font-size: var(--fs-small); }
+
+/* ===== S-L 左栏报告导航（G13） ===== */
+.side-nav {
+  position: sticky; top: var(--sp-lg);
+  display: grid; gap: var(--sp-xs); align-content: start;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-base);
+  box-shadow: var(--shadow-card); padding: var(--sp-md);
+}
+.side-title { margin: 0 0 var(--sp-xs); font-size: var(--fs-card-title); font-weight: 600; color: var(--text); }
+.side-group { margin: var(--sp-sm) 0 var(--sp-xs); font-size: var(--fs-meta); color: var(--text-3); border-top: 1px dashed var(--border-strong); padding-top: var(--sp-sm); }
+.side-item {
+  display: grid; gap: 2px; text-align: left; padding: var(--sp-sm) var(--sp-md);
+  border: 1px solid transparent; border-radius: var(--r-sm); background: none; cursor: pointer; font: inherit;
+}
+.side-item:hover { background: var(--surface-2); }
+.side-item[aria-pressed='true'] { background: var(--accent-soft); border-color: var(--accent-line); }
+.side-name { font-size: var(--fs-small); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side-meta { font-size: var(--fs-meta); color: var(--text-3); }
+.sd-ok { color: var(--ok); }
+.sd-fail { color: var(--fail); }
+.sd-queue { color: var(--queue-ink); }
+.side-empty {
+  margin: var(--sp-sm) 0 0; padding: var(--sp-md); border: 1px dashed var(--border-strong);
+  border-radius: var(--r-sm); background: var(--soft); color: var(--text-3); font-size: var(--fs-small);
+}
+
+/* ===== S-R 右栏运行详情抽屉（G13，默认收起；本产物静态展示展开态） ===== */
+.run-drawer {
+  position: sticky; top: var(--sp-lg);
+  display: grid; gap: var(--sp-lg); align-content: start;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-base);
+  box-shadow: var(--shadow-card); padding: var(--sp-md);
+}
+.drawer-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-sm); }
+.drawer-head strong { font-size: var(--fs-card-title); color: var(--text); }
+.drawer-block { border-top: 1px dashed var(--border-strong); padding-top: var(--sp-md); display: grid; gap: var(--sp-sm); }
+.drawer-line { margin: 0; font-size: var(--fs-small); color: var(--text-2); display: flex; align-items: center; gap: var(--sp-sm); flex-wrap: wrap; }
+.chip.c-ok { background: var(--ok-soft); border-color: var(--ok-line); color: var(--ok); }
+.chip.c-fail { background: var(--fail-soft); border-color: var(--fail-line); color: var(--fail); }
+.drawer-stats { display: flex; flex-wrap: wrap; gap: var(--sp-xs); }
+.timeline { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-sm); }
+.timeline li { font-size: var(--fs-small); color: var(--text-2); display: grid; gap: 2px; }
+.tl-time { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--text-3); }
+.tl-kind { font-weight: 500; color: var(--text); }
+.tl-kind.k-ok { color: var(--ok); }
+.tl-kind.k-fail { color: var(--fail); }
+.tl-fail { color: var(--fail); font-size: var(--fs-meta); }
+
+.chip {
+  display: inline-flex; align-items: center; padding: 1px 10px;
+  border-radius: var(--r-pill); border: 1px solid; font-size: var(--fs-small);
+  font-weight: 500; line-height: 1.5; flex-shrink: 0;
+}
+.chip.neutral { background: var(--surface-2); border-color: var(--border-strong); color: var(--text-2); }
+
+/* 行动项状态（沿用 st-* 按下配色语义） */
+.chip.st-suggested { background: var(--queue-soft); border-color: var(--queue-line); color: var(--queue-ink); }
+.chip.st-adopted { background: var(--ok-soft); border-color: var(--ok-line); color: var(--ok); }
+.chip.st-dismissed { background: var(--surface-2); border-color: var(--border-strong); color: var(--text-2); }
+
+/* 优先级（沿用 sev-* 配色） */
+.chip.pr-high { background: var(--fail-soft); border-color: var(--fail-line); color: var(--fail); }
+.chip.pr-medium { background: var(--warn-soft); border-color: var(--warn-line); color: var(--warn); }
+.chip.pr-low { background: var(--queue-soft); border-color: var(--queue-line); color: var(--queue-ink); }
+
+/* 证据等级四级色标（契约 6.2） */
+.chip.ev-data { background: var(--ok-soft); border-color: var(--ok-line); color: var(--ok); }
+.chip.ev-corroborated { background: var(--navy-soft); border-color: var(--navy-line); color: var(--navy); }
+.chip.ev-inferred { background: var(--warn-soft); border-color: var(--warn-line); color: var(--warn); }
+.chip.ev-assumed { background: var(--surface-2); border-color: var(--border-strong); color: var(--text-2); }
+
+/* 报告状态 */
+.chip.rp-pending { background: var(--queue-soft); border-color: var(--queue-line); color: var(--queue-ink); }
+.chip.rp-extracting { background: var(--queue-soft); border-color: var(--queue-line); color: var(--queue-ink); }
+.chip.rp-done { background: var(--ok-soft); border-color: var(--ok-line); color: var(--ok); }
+.chip.rp-failed { background: var(--fail-soft); border-color: var(--fail-line); color: var(--fail); }
+
+.demo-chip, .notify-chip {
+  display: inline-flex; align-items: center; margin-left: var(--sp-xs); padding: 0 10px;
+  border-radius: var(--r-pill); font-size: var(--fs-meta); line-height: 1.6; vertical-align: middle;
+}
+.demo-chip { background: var(--warn-soft); border: 1px solid var(--warn-line); color: var(--warn); margin-left: var(--sp-sm); }
+.notify-chip { background: var(--ok-soft); border: 1px solid var(--ok-line); color: var(--ok); }
+.notify-chip.warn { background: var(--warn-soft); border-color: var(--warn-line); color: var(--warn); }
+
+/* 「人工」徽标（G11，中性；accent 只留主操作/焦点） */
+.manual-badge {
+  display: inline-flex; align-items: center; padding: 1px 10px;
+  border-radius: var(--r-pill); border: 1px solid var(--border-strong);
+  background: var(--surface-2); color: var(--text-2);
+  font-size: var(--fs-small); font-weight: 500; line-height: 1.5;
+}
+
+/* 报告状态条 S1b */
+.report-strip { display: flex; flex-wrap: wrap; gap: var(--sp-sm); margin-top: var(--sp-lg); }
+.report-item {
+  display: inline-flex; align-items: center; gap: var(--sp-sm); flex-wrap: wrap;
+  padding: var(--sp-sm) var(--sp-md); background: var(--surface);
+  border: 1px solid var(--border); border-radius: var(--r-sm); box-shadow: var(--shadow-card);
+}
+.report-name { font-size: var(--fs-small); color: var(--text); font-weight: 500; }
+.report-time { font-size: var(--fs-meta); color: var(--text-3); }
+.report-error { font-size: var(--fs-meta); color: var(--fail); }
+
+/* 过滤器 S6 */
+.filters { margin-top: var(--sp-lg); display: grid; gap: var(--sp-sm); }
+.filter-row { display: flex; align-items: center; gap: var(--sp-sm); flex-wrap: wrap; }
+.filter-dim { font-size: var(--fs-meta); color: var(--text-3); flex-shrink: 0; width: 52px; }
+.filter-chip {
+  padding: 2px 12px; border-radius: var(--r-pill); border: 1px solid var(--border);
+  background: var(--surface); color: var(--text-2); font: inherit; font-size: var(--fs-small); cursor: pointer;
+}
+.filter-chip[aria-pressed='true'] { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent-strong); }
+.filter-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-md); flex-wrap: wrap; }
+.filter-note { margin: 0; color: var(--text-3); font-size: var(--fs-meta); }
+
+/* 行动项列表 S2 */
+.action-list { list-style: none; margin: var(--sp-lg) 0 0; padding: 0; display: grid; gap: var(--sp-lg); }
+.action-card { position: relative; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-base); box-shadow: var(--shadow-card); }
+.action-head {
+  display: flex; align-items: flex-start; gap: var(--sp-md); width: 100%; padding: var(--sp-lg);
+  border: none; background: none; text-align: left; font: inherit; color: inherit; cursor: pointer;
+  border-radius: var(--r-base);
+}
+.action-head:hover { background: var(--surface-2); }
+.head-chips { display: flex; gap: var(--sp-xs); flex-wrap: wrap; margin-bottom: var(--sp-xs); }
+.head-main { flex: 1; display: grid; gap: 2px; min-width: 0; }
+.card-title { font-size: var(--fs-card-title); font-weight: 600; line-height: 1.45; color: var(--text); }
+.card-summary { font-size: var(--fs-small); color: var(--text-2); }
+.head-meta { display: inline-flex; align-items: center; gap: var(--sp-sm); color: var(--text-3); font-size: var(--fs-meta); white-space: nowrap; }
+.confidence { font-size: var(--fs-small); color: var(--text-2); }
+.confidence b { color: var(--text); font-weight: 600; }
+.chevron { color: var(--text-3); }
+.demo-tag {
+  position: absolute; top: var(--sp-sm); right: var(--sp-sm);
+  font-size: var(--fs-meta); color: var(--text-3); border: 1px dashed var(--border-strong);
+  border-radius: var(--r-pill); padding: 0 8px; line-height: 1.6; background: var(--soft);
+}
+
+/* 操作区（常显，不依赖展开） */
+.action-ops { display: flex; align-items: center; gap: var(--sp-sm); flex-wrap: wrap; padding: 0 var(--sp-lg) var(--sp-lg); }
+.ops-label { font-size: var(--fs-meta); color: var(--text-3); }
+.decide-btn {
+  padding: 2px 12px; border-radius: var(--r-sm); border: 1px solid var(--border);
+  background: var(--surface); color: var(--text-2); font: inherit; font-size: var(--fs-small); cursor: pointer;
+}
+.decide-btn[aria-pressed='true'].is-adopt { background: var(--ok-soft); border-color: var(--ok-line); color: var(--ok); }
+.decide-btn[aria-pressed='true'].is-dismiss { background: var(--surface-2); border-color: var(--border-strong); color: var(--text-2); }
+.decided-meta { color: var(--text-3); font-size: var(--fs-meta); white-space: nowrap; align-self: center; }
+
+/* 证据展开区 S3 */
+.evidence { display: grid; gap: var(--sp-lg); padding: 0 var(--sp-lg) var(--sp-lg); }
+.evidence-block { border-top: 1px dashed var(--border-strong); padding-top: var(--sp-md); }
+.block-title { margin: 0 0 var(--sp-sm); font-size: var(--fs-card-title); font-weight: 600; color: var(--text); }
+.fact { display: grid; gap: var(--sp-xs); margin-bottom: var(--sp-md); }
+.fact:last-child { margin-bottom: 0; }
+.fact-note { font-size: var(--fs-meta); color: var(--text-3); }
+.quote-block {
+  margin: 0; padding: var(--sp-sm) var(--sp-md); background: var(--soft);
+  font-size: var(--fs-small); color: var(--text-2); border-radius: 0 var(--r-sm) var(--r-sm) 0;
+}
+.quote-block.lv-data { border-left: 3px solid var(--ok); }
+.quote-block.lv-corroborated { border-left: 3px solid var(--navy); }
+.quote-block.lv-inferred { border-left: 3px solid var(--warn); }
+.quote-block.lv-assumed { border-left: 3px solid var(--text-2); }
+.block-text { margin: 0; font-size: var(--fs-small); color: var(--text-2); }
+.evidence-foot { display: grid; gap: 2px; }
+.evidence-note { font-size: var(--fs-meta); color: var(--text-3); }
+.evidence-warn { font-size: var(--fs-meta); color: var(--text-3); font-weight: 500; }
+
+/* 驳回理由块与补填 inline（G10 / S12） */
+.dismiss-reason-line { margin: 0; font-size: var(--fs-small); color: var(--text-2); }
+.dismiss-reason-line b { color: var(--text); font-weight: 500; }
+.backfill-row { display: flex; align-items: flex-start; gap: var(--sp-sm); flex-wrap: wrap; margin-top: var(--sp-sm); }
+.backfill-row label { font-size: var(--fs-meta); color: var(--text-3); flex-shrink: 0; line-height: 26px; }
+.backfill-row input[type='text'] {
+  flex: 1; min-width: 220px; padding: var(--sp-xs) var(--sp-sm);
+  border: 1px solid var(--border); border-radius: var(--r-sm);
+  background: var(--surface); font: inherit; font-size: var(--fs-small); color: var(--text-2);
+}
+.backfill-hint { font-size: var(--fs-meta); color: var(--text-3); flex-basis: 100%; }
+
+/* 驳回理由弹窗 S11（G10，全站唯一弹层；静态展示打开态） */
+.dialog-stage {
+  border-radius: var(--r-base); background: var(--scrim);
+  padding: var(--sp-xl); display: grid; place-items: center;
+}
+.dismiss-dialog {
+  width: min(420px, 100%); background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r-base); box-shadow: var(--shadow-card);
+  padding: var(--sp-lg); display: grid; gap: var(--sp-md);
+}
+.dismiss-dialog .dlg-title { margin: 0; font-size: var(--fs-view-title); font-weight: 600; color: var(--text); }
+.dismiss-dialog .dlg-sub { margin: 0; font-size: var(--fs-small); color: var(--text-2); }
+
+/* 任务 S4 */
+.task-list { display: grid; gap: var(--sp-sm); }
+.task-row {
+  display: flex; align-items: flex-start; gap: var(--sp-md); padding: var(--sp-md);
+  border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface); flex-wrap: wrap;
+}
+.task-status { display: inline-flex; gap: var(--sp-xs); flex-shrink: 0; }
+.status-btn {
+  padding: 2px 10px; border-radius: var(--r-sm); border: 1px solid var(--border);
+  background: var(--surface); color: var(--text-2); font: inherit; font-size: var(--fs-small); cursor: pointer;
+}
+.status-btn.st-todo[aria-pressed='true'] { background: var(--queue-soft); border-color: var(--queue-line); color: var(--queue-ink); }
+.status-btn.st-doing[aria-pressed='true'] { background: var(--warn-soft); border-color: var(--warn-line); color: var(--warn); }
+.status-btn.st-done[aria-pressed='true'] { background: var(--ok-soft); border-color: var(--ok-line); color: var(--ok); }
+.task-main { flex: 1; display: grid; gap: 2px; min-width: 200px; }
+.task-note { color: var(--text); font-size: var(--fs-body); }
+.task-meta { color: var(--text-3); font-size: var(--fs-meta); }
+.task-edit {
+  padding: 2px 10px; border-radius: var(--r-sm); border: 1px solid var(--border);
+  background: var(--surface); color: var(--text-2); font-size: var(--fs-small); cursor: pointer; flex-shrink: 0;
+}
+
+/* 表单（任务/反馈/补充建议，沿用 .exec-note 输入先例） */
+.form-block { display: grid; gap: var(--sp-sm); padding: var(--sp-md); border: 1px dashed var(--border-strong); border-radius: var(--r-sm); background: var(--soft); }
+.form-grid { display: flex; gap: var(--sp-md); flex-wrap: wrap; }
+.form-field { display: grid; gap: 2px; }
+.form-field label, .form-legend { font-size: var(--fs-meta); color: var(--text-3); }
+.form-field input[type='text'], .form-field input[type='date'], .form-field select, .form-field textarea {
+  padding: var(--sp-xs) var(--sp-sm); border: 1px solid var(--border); border-radius: var(--r-sm);
+  background: var(--surface); font: inherit; font-size: var(--fs-small); color: var(--text-2);
+}
+.form-field textarea { width: 100%; min-height: 44px; resize: vertical; }
+.form-field.wide { flex: 1 1 100%; }
+.req { color: var(--fail); }
+.form-actions { display: flex; gap: var(--sp-sm); }
+.btn-primary {
+  padding: 4px 14px; border-radius: var(--r-sm); border: 1px solid var(--accent-line);
+  background: var(--accent-soft); color: var(--accent-strong); font-size: var(--fs-small); font-weight: 500; cursor: pointer;
+}
+.btn-plain {
+  padding: 4px 14px; border-radius: var(--r-sm); border: 1px solid var(--border);
+  background: var(--surface); color: var(--text-2); font-size: var(--fs-small); cursor: pointer;
+}
+.score-hint { font-size: var(--fs-meta); color: var(--text-3); }
+.score-options { display: flex; gap: var(--sp-md); flex-wrap: wrap; }
+.score-options label { display: inline-flex; align-items: center; gap: var(--sp-xs); font-size: var(--fs-small); color: var(--text-2); }
+
+/* 反馈只读块 S5 */
+.feedback-readonly { margin-top: var(--sp-sm); padding: var(--sp-md); border: 1px dashed var(--border-strong); border-radius: var(--r-sm); background: var(--soft); display: grid; gap: var(--sp-xs); }
+.feedback-head { display: flex; gap: var(--sp-sm); align-items: center; flex-wrap: wrap; }
+.feedback-line { margin: 0; font-size: var(--fs-small); color: var(--text-2); }
+.feedback-line b { color: var(--text); font-weight: 500; }
+
+/* 空态 S8 */
+.empty { margin-top: var(--sp-lg); padding: var(--sp-xl); border: 1px dashed var(--border-strong); border-radius: var(--r-base); background: var(--surface); display: grid; gap: var(--sp-xs); justify-items: center; text-align: center; }
+.empty-title { margin: 0; font-size: var(--fs-card-title); font-weight: 600; color: var(--text); }
+.empty-hint { margin: 0; color: var(--text-3); font-size: var(--fs-small); }
+.empty-lite { margin: var(--sp-lg) 0 0; padding: var(--sp-lg); border: 1px dashed var(--border-strong); border-radius: var(--r-sm); background: var(--soft); color: var(--text-3); font-size: var(--fs-small); text-align: center; }
+
+/* 错误态 S9 */
+.alert-bar { margin-top: var(--sp-lg); padding: var(--sp-md) var(--sp-lg); border: 1px solid var(--fail-line); border-radius: var(--r-sm); background: var(--fail-soft); color: var(--fail); font-size: var(--fs-small); }
+.alert-bar .alert-title { font-weight: 600; }
+.action-error { margin: var(--sp-md) 0 0; color: var(--fail); font-size: var(--fs-small); }
+.retry-btn {
+  padding: 2px 10px; border-radius: var(--r-sm); border: 1px solid var(--accent-line);
+  background: var(--accent-soft); color: var(--accent-strong); font-size: var(--fs-small); cursor: pointer;
+}
+.plain-btn {
+  padding: 2px 10px; border-radius: var(--r-sm); border: 1px solid var(--border);
+  background: var(--surface); color: var(--text-2); font-size: var(--fs-small); cursor: pointer;
+}
+
+/* 加载态 S10 */
+.spinner { display: inline-block; width: 10px; height: 10px; border: 2px solid var(--queue-line); border-top-color: var(--queue-ink); border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: -1px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.loading-note { margin-top: var(--sp-sm); color: var(--text-3); font-size: var(--fs-small); }
+.skeleton-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-base); box-shadow: var(--shadow-card); padding: var(--sp-lg); display: grid; gap: var(--sp-sm); }
+.sk { border-radius: var(--r-sm); background: var(--surface-2); animation: shimmer 1.2s ease-in-out infinite; }
+.sk.w60 { width: 60%; height: 12px; }
+.sk.w90 { width: 90%; height: 10px; }
+.sk.w40 { width: 40%; height: 10px; }
+.sk-line { height: 10px; }
+@keyframes shimmer { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
+
+/* 演示说明条 */
+.demo-note { margin-top: var(--sp-lg); padding: var(--sp-md) var(--sp-lg); border: 1px solid var(--warn-line); border-radius: var(--r-sm); background: var(--warn-soft); color: var(--warn); font-size: var(--fs-small); }
+
+/* ===== 契约注释样式（非产品样式，仅本产物用） ===== */
+.artifact-banner {
+  max-width: 1400px; margin: var(--sp-xl) auto 0; padding: var(--sp-md) var(--sp-lg);
+  border: 1px dashed var(--border-strong); border-radius: var(--r-sm); background: var(--surface);
+  color: var(--text-3); font-size: var(--fs-small);
+}
+.spec-section { margin: var(--sp-xl) 0 0; }
+.spec-section:first-of-type { margin-top: 0; }
+.spec-title {
+  margin: 0 0 var(--sp-sm); font-family: var(--font-mono); font-size: var(--fs-small);
+  color: var(--text-3); letter-spacing: 0.04em; border-bottom: 1px dashed var(--border-strong); padding-bottom: var(--sp-xs);
+}
+.spec-note { margin: var(--sp-xs) 0 var(--sp-md); color: var(--text-3); font-size: var(--fs-meta); }
+.spec-footer { max-width: 1400px; margin: var(--sp-xl) auto; padding: 0 var(--sp-lg) var(--sp-xl); color: var(--text-3); font-size: var(--fs-meta); }
+
+@media (max-width: 900px) {
+  .action-head { flex-wrap: wrap; }
+  .head-meta { order: 3; }
+  .task-row { flex-direction: column; align-items: flex-start; gap: var(--sp-sm); }
+}
+</style>
+</head>
+<body>
+
+<div class="artifact-banner">
+  契约静态产物（UI-GATE v3）· 对应 <code>.flow/ui-contract.md</code> · 非产品界面，所有报告名、行动项、任务、反馈、模型链与账本数据均为<b>示例数据</b>。
+  三栏工作台 shell（G13）：左栏 S-L 报告导航 · 主区（01–06 六区）· 右栏 S-R「运行详情」抽屉——<b>默认收起，本产物静态展示展开态</b>；DOM 顺序为主区在前、侧栏在后（窄屏 &lt;1080px 折叠为横向条）。
+  产品文案逐字取自契约第 5 节；token 逐字取自 <code>src/styles/tokens.css</code>（另加契约 6.1 的 <code>--navy-soft/--navy-line/--scrim</code>）；布局结构参考 reports-factory Workbench，视觉一律 Xanthil 基线。
+</div>
+
+<div class="workbench">
+
+  <!-- DOM 顺序：主区在前（G13 可访问性约定），左栏/右栏随后；视觉列位由 grid 控制 -->
+  <main class="wb-main" id="wb-main">
+
+    <!-- ══════════════ 第 1 区：主成功路径 ══════════════ -->
+    <section class="spec-section">
+      <h2 class="spec-title">01 主成功路径 · S1 报告概览头（含运行详情开关）/ S1b 报告状态条 / S6 过滤器（含补充建议入口）/ S2 行动项卡片（四级证据色标各一）/ S3 证据展开 / S4 任务 / S5 反馈 / 已驳回卡含驳回理由与补填 · Trace US1–US4, US8–US12</h2>
+      <p class="spec-note">排序：状态组（建议→已采纳→已驳回）→ 组内置信度降序。卡头整卡可点展开（aria-expanded）；操作区常显。点「驳回」先开 06 区弹窗（G10），理由确认后才落库。S1b 与左栏状态点同源（G14）。</p>
+
+      <div class="app">
+        <header class="overview">
+          <div class="overview-head-row">
+            <div>
+              <h1 class="page-title">决策看板</h1>
+              <p class="overview-lede">报告驱动的行动闭环</p>
+            </div>
+            <!-- S-R 开关钮：默认收起（aria-expanded=false）；本产物因静态展示抽屉展开态，此处呈现 true -->
+            <button type="button" class="btn-plain" aria-expanded="true" aria-controls="run-drawer">运行详情</button>
+          </div>
+          <p class="overview-meta">
+            最新报告 会员运营周报-1012.md · 10-12 14:32 导入 · 共 2 份报告 · 建议 2 · 已采纳 1 · 已驳回 1
+            <span class="notify-chip">已推送 · 会员运营周报-1012</span>
+          </p>
+
+          <div class="report-strip" aria-label="报告状态">
+            <span class="report-item">
+              <span class="report-name">会员运营周报-1012.md</span>
+              <span class="report-time">10-12 14:32</span>
+              <span class="chip rp-done">已抽取</span>
+              <button type="button" class="plain-btn">重新抽取</button>
+            </span>
+            <span class="report-item">
+              <span class="report-name">门店复购专项分析.md</span>
+              <span class="report-time">10-11 09:10</span>
+              <span class="chip rp-done">已抽取</span>
+              <button type="button" class="plain-btn">重新抽取</button>
+            </span>
+          </div>
+
+          <div class="filters" aria-label="过滤器">
+            <div class="filter-row">
+              <span class="filter-dim">状态</span>
+              <button type="button" class="filter-chip" aria-pressed="true">全部 4</button>
+              <button type="button" class="filter-chip" aria-pressed="false">建议 2</button>
+              <button type="button" class="filter-chip" aria-pressed="false">已采纳 1</button>
+              <button type="button" class="filter-chip" aria-pressed="false">已驳回 1</button>
+            </div>
+            <div class="filter-row">
+              <span class="filter-dim">证据等级</span>
+              <button type="button" class="filter-chip" aria-pressed="true">全部 4</button>
+              <button type="button" class="filter-chip" aria-pressed="false">数据支撑 1</button>
+              <button type="button" class="filter-chip" aria-pressed="false">多源佐证 1</button>
+              <button type="button" class="filter-chip" aria-pressed="false">逻辑推断 1</button>
+              <button type="button" class="filter-chip" aria-pressed="false">经验假设 1</button>
+            </div>
+            <div class="filter-row">
+              <span class="filter-dim">优先级</span>
+              <button type="button" class="filter-chip" aria-pressed="true">全部 4</button>
+              <button type="button" class="filter-chip" aria-pressed="false">高 2</button>
+              <button type="button" class="filter-chip" aria-pressed="false">中 1</button>
+              <button type="button" class="filter-chip" aria-pressed="false">低 1</button>
+            </div>
+            <div class="filter-row">
+              <span class="filter-dim">报告</span>
+              <button type="button" class="filter-chip" aria-pressed="true">全部 4</button>
+              <button type="button" class="filter-chip" aria-pressed="false">会员运营周报-1012 2</button>
+              <button type="button" class="filter-chip" aria-pressed="false">门店复购专项分析 2</button>
+              <button type="button" class="filter-chip" aria-pressed="false">人工补充 0</button>
+            </div>
+            <div class="filter-foot">
+              <p class="filter-note">证据等级由提取模型自评，未做真实数据重验证</p>
+              <button type="button" class="btn-primary">补充建议</button>
+            </div>
+          </div>
+        </header>
+
+        <ol class="action-list" aria-label="行动项列表">
+
+          <!-- A1：建议 · 多源佐证（蓝）· 展开态 -->
+          <li>
+            <article class="action-card">
+              <button type="button" class="action-head" aria-expanded="true">
+                <span class="head-main">
+                  <span class="head-chips">
+                    <span class="chip st-suggested">建议</span>
+                    <span class="chip ev-corroborated">多源佐证</span>
+                    <span class="chip pr-high">高</span>
+                    <span class="chip neutral">门店</span>
+                    <span class="chip neutral">持续</span>
+                    <span class="chip neutral">低</span>
+                    <span class="chip neutral">门店复购专项分析</span>
+                  </span>
+                  <span class="card-title">调整周末档品类陈列，主推报告验证的高毛利组合</span>
+                  <span class="card-summary">报告交叉验证周末时段高毛利品类组合的销售贡献，建议将周末档陈列固定为该组合。</span>
+                </span>
+                <span class="head-meta">
+                  <span class="confidence">置信度 <b>72%</b></span>
+                  <span class="chevron" aria-hidden="true">▾</span>
+                </span>
+              </button>
+
+              <div class="action-ops">
+                <span class="ops-label">确认行动：</span>
+                <button type="button" class="decide-btn is-adopt" aria-pressed="false">采纳</button>
+                <button type="button" class="decide-btn is-dismiss" aria-pressed="false">驳回</button>
+              </div>
+
+              <div class="evidence">
+                <section class="evidence-block">
+                  <h3 class="block-title">证据</h3>
+                  <div class="fact">
+                    <span class="chip ev-corroborated">多源佐证</span>
+                    <blockquote class="quote-block lv-corroborated">周末客单价高出平日 18%，其中家居与个护组合贡献销售增量的 47%，与十月试销期记录一致。</blockquote>
+                    <p class="fact-note">销售数据与试销期记录两个独立来源相互印证。</p>
+                  </div>
+                </section>
+                <section class="evidence-block">
+                  <h3 class="block-title">推导过程</h3>
+                  <p class="block-text">周末客流已呈现高客单倾向，将该倾向固化为确定性的周末陈列组合，可把偶发增量转为可持续增量，且调整成本为一次性。</p>
+                </section>
+                <section class="evidence-block">
+                  <h3 class="block-title">预期效果</h3>
+                  <p class="block-text">周末档销售额提升 5% 左右；陈列调整为一次性人力成本。</p>
+                </section>
+                <section class="evidence-block evidence-foot">
+                  <p class="evidence-note">置信度由证据派生（证据等级与原文引用决定），非模型自评。</p>
+                  <p class="evidence-warn">证据等级由提取模型自评，未做真实数据重验证</p>
+                </section>
+              </div>
+            </article>
+          </li>
+
+          <!-- A2：建议 · 逻辑推断（琥珀）· 收起态 -->
+          <li>
+            <article class="action-card">
+              <button type="button" class="action-head" aria-expanded="false">
+                <span class="head-main">
+                  <span class="head-chips">
+                    <span class="chip st-suggested">建议</span>
+                    <span class="chip ev-inferred">逻辑推断</span>
+                    <span class="chip pr-medium">中</span>
+                    <span class="chip neutral">门店</span>
+                    <span class="chip neutral">短期</span>
+                    <span class="chip neutral">中</span>
+                    <span class="chip neutral">会员运营周报-1012</span>
+                  </span>
+                  <span class="card-title">试点延长高流失门店的营业前准备时长</span>
+                  <span class="card-summary">报告推断开业高峰排队与准备不足相关，建议在两家高流失门店试点延长准备时长。</span>
+                </span>
+                <span class="head-meta">
+                  <span class="confidence">置信度 <b>55%</b></span>
+                  <span class="chevron" aria-hidden="true">▸</span>
+                </span>
+              </button>
+              <div class="action-ops">
+                <span class="ops-label">确认行动：</span>
+                <button type="button" class="decide-btn is-adopt" aria-pressed="false">采纳</button>
+                <button type="button" class="decide-btn is-dismiss" aria-pressed="false">驳回</button>
+              </div>
+            </article>
+          </li>
+
+          <!-- A3：已采纳 · 数据支撑（绿）· 展开态 · 含任务 S4 与反馈 S5 -->
+          <li>
+            <article class="action-card">
+              <button type="button" class="action-head" aria-expanded="true">
+                <span class="head-main">
+                  <span class="head-chips">
+                    <span class="chip st-adopted">已采纳</span>
+                    <span class="chip ev-data">数据支撑</span>
+                    <span class="chip pr-high">高</span>
+                    <span class="chip neutral">会员</span>
+                    <span class="chip neutral">短期</span>
+                    <span class="chip neutral">中</span>
+                    <span class="chip neutral">会员运营周报-1012</span>
+                  </span>
+                  <span class="card-title">对连续三周复购下滑的高价值会员发放定向回归券</span>
+                  <span class="card-summary">高价值会员段复购连续三周下滑，流失预警集中在近 90 天未回购人群，建议定向唤醒。</span>
+                </span>
+                <span class="head-meta">
+                  <span class="confidence">置信度 <b>90%</b></span>
+                  <span class="chevron" aria-hidden="true">▾</span>
+                </span>
+              </button>
+
+              <div class="action-ops">
+                <span class="ops-label">确认行动：</span>
+                <button type="button" class="decide-btn is-adopt" aria-pressed="true">采纳</button>
+                <button type="button" class="decide-btn is-dismiss" aria-pressed="false">驳回</button>
+                <span class="decided-meta">黄博 · 10-12 15:01 · 看板</span>
+              </div>
+
+              <div class="evidence">
+                <section class="evidence-block">
+                  <h3 class="block-title">证据</h3>
+                  <div class="fact">
+                    <span class="chip ev-data">数据支撑</span>
+                    <blockquote class="quote-block lv-data">高价值会员（近 180 天消费 ≥ 2 次）第 37–40 周复购率分别为 41.2%、38.6%、35.0%、31.4%，连续三周环比下降。</blockquote>
+                    <p class="fact-note">复购率下滑趋势来自报告表内统计口径。</p>
+                  </div>
+                  <div class="fact">
+                    <span class="chip ev-corroborated">多源佐证</span>
+                    <blockquote class="quote-block lv-corroborated">问卷调研中 62% 的流失预警会员将「没有召回优惠」列为未回购原因，与客服回访记录高频反馈一致。</blockquote>
+                    <p class="fact-note">问卷与客服回访两个独立来源相互印证。</p>
+                  </div>
+                </section>
+                <section class="evidence-block">
+                  <h3 class="block-title">推导过程</h3>
+                  <p class="block-text">复购下滑集中在可识别的人群，且未回购主因包含激励缺失，定向回归券是成本可控的唤醒手段。</p>
+                </section>
+                <section class="evidence-block">
+                  <h3 class="block-title">预期效果</h3>
+                  <p class="block-text">两周内该人群回购率回升 3–5 个百分点；券核销成本控制在可承受范围。</p>
+                </section>
+                <section class="evidence-block evidence-foot">
+                  <p class="evidence-note">置信度由证据派生（证据等级与原文引用决定），非模型自评。</p>
+                  <p class="evidence-warn">证据等级由提取模型自评，未做真实数据重验证</p>
+                </section>
+
+                <section class="evidence-block">
+                  <h3 class="block-title">任务</h3>
+                  <div class="task-list">
+                    <div class="task-row">
+                      <span class="task-status" role="group" aria-label="任务状态">
+                        <button type="button" class="status-btn st-todo" aria-pressed="false">待办</button>
+                        <button type="button" class="status-btn st-doing" aria-pressed="false">进行</button>
+                        <button type="button" class="status-btn st-done" aria-pressed="true">完成</button>
+                      </span>
+                      <span class="task-main">
+                        <span class="task-note">完成定向券配置与人群圈选，全量下发</span>
+                        <span class="task-meta">负责人 陈晨 · 截止 2026-10-15 · 优先级 高</span>
+                      </span>
+                      <button type="button" class="task-edit">编辑</button>
+                      <div class="feedback-readonly" style="flex: 1 1 100%;">
+                        <div class="feedback-head">
+                          <span class="chip neutral">反馈</span>
+                          <span class="task-meta">已执行 · 评分 4/5</span>
+                        </div>
+                        <p class="feedback-line"><b>结果：</b>定向券于 10-13 全量下发，覆盖 1,240 人。</p>
+                        <p class="feedback-line"><b>指标变化：</b>该人群一周回购率 33.1% → 36.8%（+3.7pp）。</p>
+                        <p class="feedback-line"><b>复盘：</b>核销率 22%，成本可控，建议下期扩量。</p>
+                      </div>
+                    </div>
+
+                    <div class="task-row">
+                      <span class="task-status" role="group" aria-label="任务状态">
+                        <button type="button" class="status-btn st-todo" aria-pressed="false">待办</button>
+                        <button type="button" class="status-btn st-doing" aria-pressed="false">进行</button>
+                        <button type="button" class="status-btn st-done" aria-pressed="true">完成</button>
+                      </span>
+                      <span class="task-main">
+                        <span class="task-note">回归券面额 A/B 测试收尾并出结论</span>
+                        <span class="task-meta">负责人 陈晨 · 截止 2026-10-19 · 优先级 中</span>
+                      </span>
+                      <button type="button" class="task-edit">编辑</button>
+
+                      <!-- S5 反馈回录表单（未回录时展示） -->
+                      <form class="form-block" style="flex: 1 1 100%;" aria-label="反馈回录">
+                        <div class="form-field">
+                          <label><input type="checkbox" checked> 已执行</label>
+                        </div>
+                        <div class="form-field wide">
+                          <label for="fb-outcome">结果 <span class="req">*</span></label>
+                          <textarea id="fb-outcome" placeholder="执行后的实际情况"></textarea>
+                        </div>
+                        <div class="form-field wide">
+                          <label for="fb-delta">指标变化</label>
+                          <input type="text" id="fb-delta" placeholder="例：复购率 +2.3pp">
+                        </div>
+                        <div class="form-field wide">
+                          <label for="fb-review">复盘</label>
+                          <textarea id="fb-review" placeholder="经验教训、是否继续或调整"></textarea>
+                        </div>
+                        <fieldset class="form-field wide" style="border: none; padding: 0; margin: 0;">
+                          <legend class="form-legend">评分 <span class="req">*</span>　<span class="score-hint">5=显著正向效果 · 3=无明显变化 · 1=显著负向</span></legend>
+                          <div class="score-options">
+                            <label><input type="radio" name="score-a3"> 1</label>
+                            <label><input type="radio" name="score-a3"> 2</label>
+                            <label><input type="radio" name="score-a3"> 3</label>
+                            <label><input type="radio" name="score-a3"> 4</label>
+                            <label><input type="radio" name="score-a3"> 5</label>
+                          </div>
+                        </fieldset>
+                        <div class="form-actions">
+                          <button type="button" class="btn-primary">提交反馈</button>
+                        </div>
+                      </form>
+                    </div>
+
+                    <!-- S4 新增任务表单 -->
+                    <form class="form-block" aria-label="新增任务">
+                      <div class="form-grid">
+                        <div class="form-field">
+                          <label for="t-owner">负责人 <span class="req">*</span></label>
+                          <input type="text" id="t-owner">
+                        </div>
+                        <div class="form-field">
+                          <label for="t-due">截止日 <span class="req">*</span></label>
+                          <input type="date" id="t-due">
+                        </div>
+                        <div class="form-field">
+                          <label for="t-pr">优先级</label>
+                          <select id="t-pr">
+                            <option>高</option>
+                            <option selected>中</option>
+                            <option>低</option>
+                          </select>
+                        </div>
+                        <div class="form-field">
+                          <label for="t-note">备注</label>
+                          <input type="text" id="t-note">
+                        </div>
+                      </div>
+                      <div class="form-actions">
+                        <button type="button" class="btn-primary">添加任务</button>
+                        <button type="button" class="btn-plain">取消</button>
+                      </div>
+                    </form>
+                  </div>
+                </section>
+              </div>
+            </article>
+          </li>
+
+          <!-- A4：已驳回 · 经验假设（灰）· 展开态 · 含驳回理由与补填 inline（G10/S12） -->
+          <li>
+            <article class="action-card">
+              <button type="button" class="action-head" aria-expanded="true">
+                <span class="head-main">
+                  <span class="head-chips">
+                    <span class="chip st-dismissed">已驳回</span>
+                    <span class="chip ev-assumed">经验假设</span>
+                    <span class="chip pr-low">低</span>
+                    <span class="chip neutral">门店</span>
+                    <span class="chip neutral">持续</span>
+                    <span class="chip neutral">低</span>
+                    <span class="chip neutral">门店复购专项分析</span>
+                  </span>
+                  <span class="card-title">通过全员话术培训拉动客单价</span>
+                  <span class="card-summary">报告未提供支撑数据，仅以经验判断培训可提升连带率。</span>
+                </span>
+                <span class="head-meta">
+                  <span class="confidence">置信度 <b>40%</b></span>
+                  <span class="chevron" aria-hidden="true">▾</span>
+                </span>
+              </button>
+              <div class="action-ops">
+                <span class="ops-label">确认行动：</span>
+                <button type="button" class="decide-btn is-adopt" aria-pressed="false">采纳</button>
+                <button type="button" class="decide-btn is-dismiss" aria-pressed="true">驳回</button>
+                <span class="decided-meta">黄博 · 10-12 15:20 · 飞书</span>
+              </div>
+
+              <div class="evidence">
+                <section class="evidence-block">
+                  <h3 class="block-title">驳回理由</h3>
+                  <p class="dismiss-reason-line">卡片驳回（未填理由）</p>
+                  <div class="backfill-row">
+                    <label for="bf-a4">补填理由</label>
+                    <input type="text" id="bf-a4" value="报告未包含量化数据，培训投入产出比无法评估，先小范围试点验证再决定">
+                    <button type="button" class="btn-primary">保存</button>
+                    <span class="backfill-hint">至少 2 个字 · 保存后理由只读沉淀（覆盖默认值）</span>
+                  </div>
+                </section>
+                <section class="evidence-block">
+                  <h3 class="block-title">证据</h3>
+                  <div class="fact">
+                    <span class="chip ev-assumed">经验假设</span>
+                    <blockquote class="quote-block lv-assumed">店长例会反馈：连带话术培训在其他门店有过正向案例。</blockquote>
+                    <p class="fact-note">经验判断，报告内无量化数据支撑。</p>
+                  </div>
+                </section>
+                <section class="evidence-block">
+                  <h3 class="block-title">推导过程</h3>
+                  <p class="block-text">话术质量影响连带率，培训或可提升客单价，但缺乏本店数据验证。</p>
+                </section>
+                <section class="evidence-block">
+                  <h3 class="block-title">预期效果</h3>
+                  <p class="block-text">客单价小幅提升（无量化依据）。</p>
+                </section>
+                <section class="evidence-block evidence-foot">
+                  <p class="evidence-note">置信度由证据派生（证据等级与原文引用决定），非模型自评。</p>
+                  <p class="evidence-warn">证据等级由提取模型自评，未做真实数据重验证</p>
+                </section>
+              </div>
+            </article>
+          </li>
+        </ol>
+
+        <p class="action-error" role="alert" hidden>保存失败，已恢复为服务器状态</p>
+      </div>
+    </section>
+
+    <!-- ══════════════ 第 2 区：S7 演示态 ══════════════ -->
+    <section class="spec-section">
+      <h2 class="spec-title">02 S7 演示态 · 无报告时固定 3 条示例（各覆盖一种证据等级：数据支撑/逻辑推断/经验假设）· Trace US15, G7</h2>
+      <p class="spec-note">「演示数据」chip 常显；操作不落库（含「驳回」同样走弹窗形态）；有报告但无密钥时走 04 错误态，不显示本态。演示态下 S-L 报告列表为空态（右侧演示）。</p>
+
+      <div class="app">
+        <header class="overview">
+          <div class="overview-head-row">
+            <div>
+              <h1 class="page-title">决策看板</h1>
+              <p class="overview-lede">报告驱动的行动闭环</p>
+            </div>
+            <button type="button" class="btn-plain" aria-expanded="false" aria-controls="run-drawer">运行详情</button>
+          </div>
+          <p class="overview-meta">
+            共 0 份报告 · 建议 3 · 已采纳 0 · 已驳回 0
+            <span class="demo-chip">演示数据</span>
+            <span class="notify-chip warn">推送未配置</span>
+          </p>
+        </header>
+
+        <p class="demo-note">当前为演示数据：将分析报告（.md/.txt）放入 data/raw/ 后自动抽取真实行动项。</p>
+
+        <div class="filters" aria-label="过滤器">
+          <div class="filter-row">
+            <span class="filter-dim">证据等级</span>
+            <button type="button" class="filter-chip" aria-pressed="true">全部 3</button>
+            <button type="button" class="filter-chip" aria-pressed="false">数据支撑 1</button>
+            <button type="button" class="filter-chip" aria-pressed="false">多源佐证 0</button>
+            <button type="button" class="filter-chip" aria-pressed="false">逻辑推断 1</button>
+            <button type="button" class="filter-chip" aria-pressed="false">经验假设 1</button>
+          </div>
+          <div class="filter-foot">
+            <p class="filter-note">证据等级由提取模型自评，未做真实数据重验证</p>
+            <button type="button" class="btn-primary">补充建议</button>
+          </div>
+        </div>
+
+        <ol class="action-list" aria-label="行动项列表（演示）">
+          <li>
+            <article class="action-card">
+              <span class="demo-tag">示例</span>
+              <button type="button" class="action-head" aria-expanded="true">
+                <span class="head-main">
+                  <span class="head-chips">
+                    <span class="chip st-suggested">建议</span>
+                    <span class="chip ev-data">数据支撑</span>
+                    <span class="chip pr-high">高</span>
+                    <span class="chip neutral">会员</span>
+                    <span class="chip neutral">短期</span>
+                    <span class="chip neutral">中</span>
+                  </span>
+                  <span class="card-title">（示例）对复购下滑人群发放定向券</span>
+                  <span class="card-summary">演示样例：展示「报告原文支撑」级证据的行动项形态。</span>
+                </span>
+                <span class="head-meta">
+                  <span class="confidence">置信度 <b>85%</b></span>
+                  <span class="chevron" aria-hidden="true">▾</span>
+                </span>
+              </button>
+              <div class="action-ops">
+                <span class="ops-label">确认行动：</span>
+                <button type="button" class="decide-btn is-adopt" aria-pressed="false">采纳</button>
+                <button type="button" class="decide-btn is-dismiss" aria-pressed="false">驳回</button>
+              </div>
+              <div class="evidence">
+                <section class="evidence-block">
+                  <h3 class="block-title">证据</h3>
+                  <div class="fact">
+                    <span class="chip ev-data">数据支撑</span>
+                    <blockquote class="quote-block lv-data">（示例引用）高价值会员复购率连续三周环比下降，累计降幅 9.8 个百分点。</blockquote>
+                    <p class="fact-note">演示样例事实说明。</p>
+                  </div>
+                </section>
+                <section class="evidence-block">
+                  <h3 class="block-title">推导过程</h3>
+                  <p class="block-text">（示例）复购下滑集中在可识别人群，定向唤醒成本可控。</p>
+                </section>
+                <section class="evidence-block">
+                  <h3 class="block-title">预期效果</h3>
+                  <p class="block-text">（示例）两周内回购率回升 3–5 个百分点。</p>
+                </section>
+                <section class="evidence-block evidence-foot">
+                  <p class="evidence-note">置信度由证据派生（证据等级与原文引用决定），非模型自评。</p>
+                  <p class="evidence-warn">证据等级由提取模型自评，未做真实数据重验证</p>
+                </section>
+              </div>
+            </article>
+          </li>
+          <li>
+            <article class="action-card">
+              <span class="demo-tag">示例</span>
+              <button type="button" class="action-head" aria-expanded="false">
+                <span class="head-main">
+                  <span class="head-chips">
+                    <span class="chip st-suggested">建议</span>
+                    <span class="chip ev-inferred">逻辑推断</span>
+                    <span class="chip pr-medium">中</span>
+                  </span>
+                  <span class="card-title">（示例）优化高峰时段排班</span>
+                  <span class="card-summary">演示样例：展示「推导」级证据的行动项形态。</span>
+                </span>
+                <span class="head-meta">
+                  <span class="confidence">置信度 <b>55%</b></span>
+                  <span class="chevron" aria-hidden="true">▸</span>
+                </span>
+              </button>
+            </article>
+          </li>
+          <li>
+            <article class="action-card">
+              <span class="demo-tag">示例</span>
+              <button type="button" class="action-head" aria-expanded="false">
+                <span class="head-main">
+                  <span class="head-chips">
+                    <span class="chip st-suggested">建议</span>
+                    <span class="chip ev-assumed">经验假设</span>
+                    <span class="chip pr-low">低</span>
+                  </span>
+                  <span class="card-title">（示例）开展会员日主题陈列</span>
+                  <span class="card-summary">演示样例：展示「无数据降级」级证据的行动项形态。</span>
+                </span>
+                <span class="head-meta">
+                  <span class="confidence">置信度 <b>40%</b></span>
+                  <span class="chevron" aria-hidden="true">▸</span>
+                </span>
+              </button>
+            </article>
+          </li>
+        </ol>
+
+        <!-- S-L 空态演示（无报告时与主区演示态并存；固定项仍在，报告列表为空态文案） -->
+        <p class="spec-note" style="margin-top: var(--sp-lg);">S-L 左栏空态（同屏并存演示）：</p>
+        <aside class="side-nav" aria-label="报告导航（空态演示）" style="max-width: 280px;">
+          <p class="side-title">报告导航</p>
+          <button type="button" class="side-item" aria-pressed="true"><span class="side-name">全部</span></button>
+          <button type="button" class="side-item" aria-pressed="false"><span class="side-name">人工补充</span></button>
+          <p class="side-group">报告</p>
+          <p class="side-empty">尚无报告：将 .md/.txt 放入 data/raw/ 后自动出现。</p>
+        </aside>
+      </div>
+    </section>
+
+    <!-- ══════════════ 第 3 区：S8 空态 ══════════════ -->
+    <section class="spec-section">
+      <h2 class="spec-title">03 S8 空态 · 左：报告空态（有报告、抽取成功、0 行动项）右下：过滤空态 · Trace US15</h2>
+      <p class="spec-note">无报告不是空态（走 02 演示态）；「报告未抽取到行动项」是合法抽取结果。</p>
+
+      <div class="app">
+        <div class="empty">
+          <p class="empty-title">该报告未抽取到行动项</p>
+          <p class="empty-hint">报告已解析完成，但未包含可执行建议；可尝试重新抽取或检查报告内容。</p>
+        </div>
+
+        <div class="filters" aria-label="过滤器">
+          <div class="filter-row">
+            <span class="filter-dim">证据等级</span>
+            <button type="button" class="filter-chip" aria-pressed="false">全部 4</button>
+            <button type="button" class="filter-chip" aria-pressed="true">数据支撑 0</button>
+          </div>
+        </div>
+        <p class="empty-lite">该过滤条件下暂无行动项</p>
+      </div>
+    </section>
+
+    <!-- ══════════════ 第 4 区：S9 错误态 ══════════════ -->
+    <section class="spec-section">
+      <h2 class="spec-title">04 S9 错误态 · 无密钥 / 抽取失败重试 / 保存失败 / 推送降级 · Trace US14/15/16, G7</h2>
+      <p class="spec-note">无密钥但有报告时显示明确错误态，不得以演示态遮掩（G7）；推送降级不阻塞看板闭环。保存失败 alert 覆盖全部写操作（含弹窗确认驳回、补填、补充建议提交）。模型链主备/密钥的常驻呈现归 S-R 右栏（时间线同步出现失败原因行）。</p>
+
+      <div class="app">
+        <p class="alert-bar" role="alert">
+          <span class="alert-title">模型服务不可用：</span>未配置 API 密钥，无法抽取行动项。配置密钥后点击重试。
+        </p>
+
+        <div class="report-strip" aria-label="报告状态">
+          <span class="report-item">
+            <span class="report-name">库存周转复盘.txt</span>
+            <span class="report-time">10-12 16:40</span>
+            <span class="chip rp-failed">抽取失败</span>
+            <span class="report-error">抽取失败：模型调用超时（120s）</span>
+            <button type="button" class="retry-btn">重试</button>
+          </span>
+        </div>
+
+        <p class="action-error" role="alert">保存失败，已恢复为服务器状态</p>
+
+        <p class="overview-meta" style="margin-top: var(--sp-lg);">通知 chip 四态：</p>
+        <div class="filter-row" style="margin-top: var(--sp-sm);">
+          <span class="notify-chip">已推送 · 会员运营周报-1012</span>
+          <span class="notify-chip warn">已配置 · 未推送</span>
+          <span class="notify-chip warn">未配置飞书 · 文本摘要推送</span>
+          <span class="notify-chip warn">推送未配置</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══════════════ 第 5 区：S10 加载态 ══════════════ -->
+    <section class="spec-section">
+      <h2 class="spec-title">05 S10 加载态 · 左：单报告抽取中（aria-live，S-L 状态点同步）右：首屏骨架 · Trace US1/15</h2>
+      <p class="spec-note">抽取中不阻塞其余报告的行动项展示；首屏骨架避免空态/错误态闪烁误判；S-L/S-R 骨架不单独做（跟随首屏数据一起到）。</p>
+
+      <div class="app" aria-label="抽取中示例">
+        <div class="report-strip">
+          <span class="report-item">
+            <span class="report-name">库存周转复盘.txt</span>
+            <span class="report-time">10-12 16:40</span>
+            <span class="chip rp-extracting"><span class="spinner" aria-hidden="true"></span>&nbsp;抽取中</span>
+          </span>
+        </div>
+        <p class="loading-note" aria-live="polite">正在抽取行动项，模型调用最长约 2 分钟，完成后自动刷新。</p>
+      </div>
+
+      <div class="app" aria-label="首屏骨架示例" aria-busy="true" style="margin-top: var(--sp-xl);">
+        <header class="overview">
+          <div class="sk sk-line w60" style="height: 18px;"></div>
+          <div class="sk sk-line w90"></div>
+          <div class="sk sk-line w40"></div>
+        </header>
+        <ol class="action-list">
+          <li class="skeleton-card"><div class="sk sk-line w60"></div><div class="sk sk-line w90"></div><div class="sk sk-line w40"></div></li>
+          <li class="skeleton-card"><div class="sk sk-line w60"></div><div class="sk sk-line w90"></div><div class="sk sk-line w40"></div></li>
+          <li class="skeleton-card"><div class="sk sk-line w60"></div><div class="sk sk-line w90"></div><div class="sk sk-line w40"></div></li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- ══════════════ 第 6 区：G10/G11 变更回灌 ══════════════ -->
+    <section class="spec-section">
+      <h2 class="spec-title">06 G10/G11 变更回灌 · S11 驳回理由弹窗（打开态）/ S13 补充建议表单 / 人工补充卡片（「人工」徽标）· Trace US19/US20；G12 无用户可见界面（US21，负面用例 7）</h2>
+      <p class="spec-note">弹窗约定：原生 &lt;dialog&gt; + showModal()；打开聚焦 textarea；Esc/取消关闭后焦点回「驳回」钮；理由 &lt;2 字时弹窗内 error「请填写驳回理由（至少 2 个字）」（静态产物展示打开态，交互以契约为准）。补充建议表单为区内 inline，非弹窗。</p>
+
+      <div class="app" aria-label="驳回弹窗演示">
+        <div class="dialog-stage">
+          <div class="dismiss-dialog" role="dialog" aria-modal="true" aria-labelledby="dlg-title">
+            <h3 class="dlg-title" id="dlg-title">驳回行动项</h3>
+            <p class="dlg-sub">调整周末档品类陈列，主推报告验证的高毛利组合</p>
+            <div class="form-field wide">
+              <label for="dlg-reason">驳回理由 <span class="req">*</span></label>
+              <textarea id="dlg-reason" placeholder="例：报告数据仅覆盖两家门店，不足以支撑全部门店推广"></textarea>
+              <span class="score-hint">至少 2 个字</span>
+            </div>
+            <div class="form-actions">
+              <button type="button" class="btn-primary">确认驳回</button>
+              <button type="button" class="btn-plain">取消</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- S13 补充建议表单（inline） -->
+        <form class="form-block" aria-label="补充建议" style="margin-top: var(--sp-lg);">
+          <div class="form-field wide">
+            <label for="sg-title">标题 <span class="req">*</span></label>
+            <input type="text" id="sg-title" placeholder="例：增设午市套餐，提升工作日午间客流">
+          </div>
+          <div class="form-field wide">
+            <label for="sg-basis">依据 <span class="req">*</span></label>
+            <textarea id="sg-basis" placeholder="判断依据 / 理由（必填，将作为该行动项的推导过程展示）"></textarea>
+          </div>
+          <div class="form-grid">
+            <div class="form-field">
+              <label for="sg-scene">场景（可选）</label>
+              <select id="sg-scene">
+                <option>不填</option>
+                <option>会员</option>
+                <option>门店</option>
+              </select>
+            </div>
+            <div class="form-field">
+              <label for="sg-lifecycle">周期（可选）</label>
+              <select id="sg-lifecycle">
+                <option>不填</option>
+                <option>短期</option>
+                <option>持续</option>
+              </select>
+            </div>
+            <div class="form-field">
+              <label for="sg-pr">优先级（可选）</label>
+              <select id="sg-pr">
+                <option>不填</option>
+                <option>高</option>
+                <option>中</option>
+                <option>低</option>
+              </select>
+            </div>
+            <div class="form-field">
+              <label for="sg-effort">投入（可选）</label>
+              <select id="sg-effort">
+                <option>不填</option>
+                <option>低</option>
+                <option>中</option>
+                <option>高</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-actions">
+            <button type="button" class="btn-primary">提交</button>
+            <button type="button" class="btn-plain">取消</button>
+          </div>
+        </form>
+
+        <ol class="action-list" aria-label="人工补充行动项示例">
+          <!-- 人工补充项：建议态 · 「人工」徽标替代置信度 · 证据等级固定「经验假设」·「人工补充」分组 chip -->
+          <li>
+            <article class="action-card">
+              <button type="button" class="action-head" aria-expanded="true">
+                <span class="head-main">
+                  <span class="head-chips">
+                    <span class="chip st-suggested">建议</span>
+                    <span class="chip ev-assumed">经验假设</span>
+                    <span class="chip pr-medium">中</span>
+                    <span class="chip neutral">门店</span>
+                    <span class="chip neutral">持续</span>
+                    <span class="chip neutral">人工补充</span>
+                  </span>
+                  <span class="card-title">（示例）增设午市套餐，提升工作日午间客流</span>
+                  <span class="card-summary">人工补充建议：店长例会多次反馈午间客流闲置，先行试点。</span>
+                </span>
+                <span class="head-meta">
+                  <span class="manual-badge">人工</span>
+                  <span class="chevron" aria-hidden="true">▾</span>
+                </span>
+              </button>
+              <div class="action-ops">
+                <span class="ops-label">确认行动：</span>
+                <button type="button" class="decide-btn is-adopt" aria-pressed="false">采纳</button>
+                <button type="button" class="decide-btn is-dismiss" aria-pressed="false">驳回</button>
+              </div>
+              <div class="evidence">
+                <section class="evidence-block">
+                  <h3 class="block-title">推导过程</h3>
+                  <p class="block-text">工作日 11:30–13:00 客流不足三成，周边写字楼午餐需求未被承接，午市套餐可提升时段坪效。</p>
+                  <p class="empty-lite" style="margin-top: var(--sp-sm); text-align: left;">人工补充建议，未引用报告事实</p>
+                </section>
+                <section class="evidence-block evidence-foot">
+                  <p class="evidence-note">人工补充建议：不参与置信度派生，证据等级固定「经验假设」。</p>
+                </section>
+              </div>
+            </article>
+          </li>
+        </ol>
+        <p class="spec-note">提交后创建 sourceKind=manual 行动项：状态=建议（仍需采纳确认）、归入过滤器「报告 → 人工补充」分组（S-L 固定项同步聚焦）、证据等级固定「经验假设」（灰）、卡头以「人工」徽标替代置信度数值；采纳后与抽取项同权进入 任务 → 反馈 闭环，且不受报告重新抽取影响（G3/G11）。</p>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ══════════════ S-L 左栏报告导航（G13）══════════════ -->
+  <aside class="side-nav" aria-label="报告导航">
+    <p class="side-title">报告导航</p>
+    <button type="button" class="side-item" aria-pressed="true"><span class="side-name">全部</span></button>
+    <button type="button" class="side-item" aria-pressed="false"><span class="side-name">人工补充</span></button>
+    <p class="side-group">报告</p>
+    <button type="button" class="side-item" aria-pressed="false">
+      <span class="side-name">会员运营周报-1012.md</span>
+      <span class="side-meta"><span class="sd-ok">● 已抽取</span> · 10-12 14:32</span>
+    </button>
+    <button type="button" class="side-item" aria-pressed="false">
+      <span class="side-name">门店复购专项分析.md</span>
+      <span class="side-meta"><span class="sd-ok">● 已抽取</span> · 10-11 09:10</span>
+    </button>
+    <button type="button" class="side-item" aria-pressed="false">
+      <span class="side-name">库存周转复盘.txt</span>
+      <span class="side-meta"><span class="sd-fail">● 抽取失败</span> · 10-12 16:40</span>
+    </button>
+    <p class="spec-note" style="margin: var(--sp-sm) 0 0;">点击 = 主区 S6 过滤器「报告」维聚焦联动（G9 聚合不变，非路由）；状态点与 S1b 同源（G14）；无删除入口（报告是磁盘文件事实源）。</p>
+  </aside>
+
+  <!-- ══════════════ S-R 右栏运行详情抽屉（G13）══════════════ -->
+  <!-- 默认收起（开关钮 aria-expanded=false）；本产物静态展示展开态以钉内容契约。非模态：无遮罩、不圈焦点、收起不影响主区。 -->
+  <aside class="run-drawer" aria-label="运行详情" id="run-drawer">
+    <div class="drawer-head">
+      <strong>运行详情</strong>
+      <button type="button" class="plain-btn">关闭</button>
+    </div>
+    <section class="drawer-block">
+      <h3 class="block-title">模型链</h3>
+      <p class="drawer-line">主 MiniMax-M3 <span class="chip c-ok">就绪</span></p>
+      <p class="drawer-line">备 mimo-v2.6-flash <span class="chip c-fail">未配置</span></p>
+    </section>
+    <section class="drawer-block">
+      <h3 class="block-title">任务账本用量</h3>
+      <div class="drawer-stats">
+        <span class="chip neutral">模型调用 12</span>
+        <span class="chip neutral">token 入 48,210</span>
+        <span class="chip neutral">token 出 9,876</span>
+        <span class="chip neutral">用时 86s</span>
+      </div>
+    </section>
+    <section class="drawer-block">
+      <h3 class="block-title">抽取事件</h3>
+      <ol class="timeline">
+        <li>
+          <span class="tl-time">10-12 16:41:02</span>
+          <span><span class="tl-kind k-fail">抽取失败</span> · 库存周转复盘.txt</span>
+          <span class="tl-fail">失败原因：模型调用超时（120s）</span>
+        </li>
+        <li>
+          <span class="tl-time">10-12 14:33:40</span>
+          <span><span class="tl-kind k-ok">抽取成功</span> · 会员运营周报-1012.md · 4 条行动项</span>
+        </li>
+        <li>
+          <span class="tl-time">10-12 14:32:11</span>
+          <span><span class="tl-kind">抽取开始</span> · 会员运营周报-1012.md</span>
+        </li>
+        <li>
+          <span class="tl-time">10-11 09:11:25</span>
+          <span><span class="tl-kind k-ok">抽取成功</span> · 门店复购专项分析.md · 3 条行动项</span>
+        </li>
+      </ol>
+    </section>
+  </aside>
+
+</div>
+
+<footer class="spec-footer">
+  产物清单：.flow/ui/m5-board.html（本文件，单页静态、内联 CSS、无 JS）｜契约：.flow/ui-contract.md（第 9 节）。
+  Shell ↔ Surface：三栏 = S-L 报告导航 + 主区 + S-R 运行详情抽屉（默认收起，此处展示展开态；US22，G13）；G14 平移 = S1 统计留主区、S1b/左栏状态点同源、token/焦点环/卡片基线不变（US23）。
+  分区 ↔ Surface：01→S1/S1b/S6/S2/S3/S4/S5 + S12 补填 inline（US1–4, 8–12, 19）｜02→S7 + S-L 空态（US15, G7）｜03→S8（US15）｜04→S9（US14/15/16）｜05→S10（US1/15）｜06→S11 驳回弹窗 + S13 补充建议表单 + 人工补充卡片（US19/20，G10/G11）。
+  飞书审批卡片（S-EXT，US5–7/19）为外部表面，在看板窗口外渲染，故本产物不包含其界面；G12 校准注入无用户可见界面（US21，契约负面用例 7）。
+</footer>
+
+</body>
+</html>
