@@ -11,6 +11,7 @@ import { ProjectNav } from './components/ProjectNav'
 import { OverviewHeader } from './components/OverviewHeader'
 import { ActionFilters, type EvidenceFilter, type PriorityFilter, type ReportFilter, type StatusFilter } from './components/ActionFilters'
 import { ActionItemCard } from './components/ActionItemCard'
+import { PresentationMode } from './components/PresentationMode'
 
 const ACTIVE_PROJECT_KEY = 'dp.activeProjectId'
 
@@ -49,6 +50,8 @@ export default function App({ projects: injectedProjects, data: injectedBoard }:
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set())
   const [drawerOpen, setDrawerOpen] = useState(false)
   const drawerBtnRef = useRef<HTMLButtonElement>(null)
+  const [presentationOpen, setPresentationOpen] = useState(false)
+  const presentationBtnRef = useRef<HTMLButtonElement>(null)
 
   // G7'：当前项目持久化；项目切换时重置报告过滤与展开态（报告 id 属于旧项目）
   useEffect(() => {
@@ -93,7 +96,30 @@ export default function App({ projects: injectedProjects, data: injectedBoard }:
     drawerBtnRef.current?.focus() // 关闭后焦点回开关钮（非模态抽屉语义）
   }
 
+
   const view = board.view
+
+  // S15 快捷键 P（2.18.1）：工作台、无输入焦点（input/textarea/select/contentEditable）时等效点击入口
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'p' && event.key !== 'P') return
+      if (event.ctrlKey || event.metaKey || event.altKey) return
+      if (presentationOpen || !view) return
+      const el = document.activeElement
+      if (
+        el instanceof HTMLInputElement ||
+        el instanceof HTMLTextAreaElement ||
+        el instanceof HTMLSelectElement ||
+        (el instanceof HTMLElement && el.isContentEditable)
+      ) {
+        return
+      }
+      event.preventDefault()
+      setPresentationOpen(true)
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [presentationOpen, view])
 
   if (projects.loading && projects.projects.length === 0) {
     // 首屏加载：骨架，不显示空态/错误态（避免闪烁误判）
@@ -231,6 +257,8 @@ export default function App({ projects: injectedProjects, data: injectedBoard }:
         onUpload={store.uploadReports}
         onExtract={store.extractReport}
         modelAvailable={view.modelChain.available}
+        presentationBtnRef={presentationBtnRef}
+        onOpenPresentation={() => setPresentationOpen(true)}
       />
       <ActionFilters
         items={items}
@@ -279,6 +307,15 @@ export default function App({ projects: injectedProjects, data: injectedBoard }:
           </p>
         )}
       </section>
+      {presentationOpen && (
+        <PresentationMode
+          view={view}
+          onAdopt={store.adopt}
+          onDismiss={store.dismiss}
+          onClose={() => setPresentationOpen(false)}
+          returnFocusRef={presentationBtnRef}
+        />
+      )}
     </WorkbenchShell>
   )
 }

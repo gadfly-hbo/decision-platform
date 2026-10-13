@@ -381,6 +381,84 @@ button { font: inherit; }
 .sk-line { height: 10px; }
 @keyframes shimmer { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
 
+/* ===== S15 汇报模式（v6；静态演示画框，产品实现为 fixed inset-0 覆盖层） ===== */
+.pres-stage {
+  aspect-ratio: 16 / 9; width: 100%; background: var(--bg);
+  border: 1px solid var(--border-strong); border-radius: var(--r-base); box-shadow: var(--shadow-card);
+  padding: clamp(18px, 4vh, 44px) clamp(22px, 6vw, 68px);
+  display: flex; flex-direction: column; gap: clamp(8px, 2vh, 20px); overflow: hidden;
+}
+.pres-proj { margin: 0; font-size: 24px; font-weight: 600; color: var(--text); }
+.pres-sub { margin: 0; font-size: 14px; color: var(--text-3); }
+.stat-row { display: flex; gap: clamp(18px, 4vw, 48px); flex-wrap: wrap; align-items: flex-end; }
+.stat { display: grid; }
+.stat-num { font-size: 64px; font-weight: 600; line-height: 1.05; color: var(--text); }
+.stat-label { font-size: 14px; color: var(--text-3); }
+.range-seg { display: flex; gap: var(--sp-sm); }
+.dist-bar { display: flex; height: 18px; border-radius: var(--r-pill); overflow: hidden; border: 1px solid var(--border-strong); }
+.dist-seg { height: 100%; }
+.ds-data { background: var(--ok); }
+.ds-corr { background: var(--navy); }
+.ds-inf { background: var(--warn); }
+.ds-ass { background: var(--text-3); }
+.dist-legend { display: flex; gap: var(--sp-md); flex-wrap: wrap; font-size: 13px; color: var(--text-2); }
+.legend-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; vertical-align: -1px; margin-right: 4px; }
+.ld-data { background: var(--ok); } .ld-corr { background: var(--navy); } .ld-inf { background: var(--warn); } .ld-ass { background: var(--text-3); }
+.agenda { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.agenda-row {
+  display: flex; align-items: center; gap: var(--sp-md); padding: var(--sp-xs) var(--sp-sm);
+  border-radius: var(--r-sm); cursor: pointer; background: none; border: none; font: inherit; width: 100%; text-align: left;
+}
+.agenda-row:hover { background: var(--surface-2); }
+.agenda-no { font-family: var(--font-mono); color: var(--text-3); font-size: 14px; flex-shrink: 0; }
+.agenda-title { font-size: 16px; color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pres-keys { margin-top: auto; text-align: center; color: var(--text-3); font-size: 16px; }
+.pres-pageno { display: flex; gap: var(--sp-md); align-items: baseline; font-family: var(--font-mono); font-size: 18px; color: var(--text-3); }
+.range-tag { font-family: var(--font-sans); font-size: 14px; color: var(--text-2); border: 1px solid var(--border-strong); border-radius: var(--r-pill); padding: 1px 10px; }
+.pres-title { margin: 0; font-size: clamp(28px, 4vw, 44px); font-weight: 600; line-height: 1.25; color: var(--text); }
+.pres-badges { display: flex; gap: var(--sp-sm); flex-wrap: wrap; }
+.pres-chip { font-size: 14px; padding: 2px 12px; border-radius: var(--r-pill); border: 1px solid; font-weight: 500; line-height: 1.7; display: inline-flex; align-items: center; }
+.pres-evidence { display: flex; gap: clamp(16px, 3vw, 32px); align-items: flex-start; flex-wrap: wrap; }
+.conf-wrap { display: grid; gap: 4px; flex-shrink: 0; }
+.conf-big { font-size: 56px; font-weight: 600; color: var(--text); line-height: 1; }
+.conf-big-label { font-size: 14px; color: var(--text-3); }
+.pres-quote {
+  margin: 0; padding: var(--sp-sm) var(--sp-md); background: var(--soft); border-left: 3px solid var(--ok);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0; font-size: 24px; line-height: 1.6; color: var(--text-2); flex: 1; min-width: 260px;
+}
+.pres-quote.lv-data { border-left-color: var(--ok); }
+.pres-quote.lv-corroborated { border-left-color: var(--navy); }
+.pres-quote.lv-inferred { border-left-color: var(--warn); }
+.pres-quote.lv-assumed { border-left-color: var(--text-2); }
+.pres-collapse {
+  font-size: 14px; color: var(--text-3); border: 1px dashed var(--border-strong); border-radius: var(--r-sm);
+  padding: var(--sp-xs) var(--sp-sm); background: var(--surface); align-self: flex-start; cursor: pointer;
+}
+.pres-line { margin: 0; font-size: 20px; color: var(--text-2); }
+.pres-line b { color: var(--text); font-weight: 500; }
+.pres-src { font-size: 14px; color: var(--text-3); }
+.pres-actions { display: flex; gap: var(--sp-md); align-items: center; }
+.btn-adopt-lg {
+  padding: 12px 32px; border-radius: var(--r-sm); border: 1px solid var(--ok);
+  background: var(--ok); color: var(--surface); font-size: 20px; font-weight: 600; cursor: pointer;
+}
+.btn-dismiss-lg {
+  padding: 12px 32px; border-radius: var(--r-sm); border: 1px solid var(--fail-line);
+  background: var(--fail-soft); color: var(--fail); font-size: 20px; font-weight: 600; cursor: pointer;
+}
+.decided-line-lg { margin: 0; font-size: 20px; color: var(--text-2); }
+.pres-empty {
+  padding: var(--sp-lg); border: 1px dashed var(--border-strong); border-radius: var(--r-sm);
+  color: var(--text-3); font-size: 18px; text-align: center; display: grid; gap: var(--sp-sm); justify-items: center;
+}
+/* S11 大字号变体（S15 内驳回弹窗） */
+.dlg-lg { width: min(560px, 100%); }
+.dlg-lg .dlg-title { font-size: 28px; }
+.dlg-lg textarea { font-size: 20px; min-height: 72px; }
+.dlg-lg .form-field label { font-size: 16px; }
+.dlg-lg .score-hint { font-size: 14px; }
+.dlg-lg .btn-primary, .dlg-lg .btn-plain { font-size: 18px; padding: 8px 20px; }
+
 /* ===== 契约注释样式（非产品样式，仅本产物用） ===== */
 .artifact-banner {
   max-width: 1400px; margin: var(--sp-xl) auto 0; padding: var(--sp-md) var(--sp-lg);
@@ -406,9 +484,10 @@ button { font: inherit; }
 <body>
 
 <div class="artifact-banner">
-  契约静态产物（UI-GATE <b>v5</b>，M6 项目化看板）· 对应 <code>.flow/ui-contract.md</code> · 非产品界面，所有项目、报告名、行动项、任务、反馈、模型链与账本数据均为<b>示例数据</b>（无演示态——S7 已随 v5 退役）。
-  三栏 shell：左栏 S-L <b>项目导航</b>（新建/编辑/删除/切换/计数）· 主区 = <b>当前项目</b>的看板（7 个分区）· 右栏 S-R「运行详情」抽屉（默认收起，此处静态展示展开态；全局账本）。
-  当前项目记忆 = localStorage <code>dp.activeProjectId</code>（无路由，G7'）。产品文案逐字取自契约第 5 节；token 逐字取自 <code>src/styles/tokens.css</code>（另加 <code>--navy-soft/--navy-line/--scrim</code>）。
+  契约静态产物（UI-GATE <b>v6</b>，M7 会议汇报模式）· 对应 <code>.flow/ui-contract.md</code> · 非产品界面，所有项目、报告名、行动项、任务、反馈、模型链与账本数据均为<b>示例数据</b>（无演示态——S7 已随 v5 退役）。
+  三栏 shell：左栏 S-L <b>项目导航</b> · 主区 = <b>当前项目</b>的看板（8 个分区，08 = 汇报模式覆盖层）· 右栏 S-R「运行详情」抽屉（默认收起，此处静态展示展开态；全局账本）。
+  当前项目记忆 = localStorage <code>dp.activeProjectId</code>（无路由，G7'）。S15 汇报模式为 fixed 覆盖层（08 区静态演示汇总页/逐项页/大字弹窗/空议程；键盘/焦点/800ms/fade 以契约 2.18 钉约定）。
+  产品文案逐字取自契约第 5 节；token 逐字取自 <code>src/styles/tokens.css</code>（另加 <code>--navy-soft/--navy-line/--scrim</code>）。
 </div>
 
 <div class="workbench">
@@ -428,7 +507,11 @@ button { font: inherit; }
               <h1 class="page-title">门店运营</h1>
               <p class="overview-lede">线下门店经营周度复盘与行动跟踪</p>
             </div>
-            <button type="button" class="btn-plain" aria-expanded="true" aria-controls="run-drawer">运行详情</button>
+            <!-- v6：S1 按钮组 = [汇报模式（主级，快捷键 P）] + [运行详情（开关）] -->
+            <div class="filter-row" style="gap: var(--sp-sm);">
+              <button type="button" class="btn-primary">汇报模式</button>
+              <button type="button" class="btn-plain" aria-expanded="true" aria-controls="run-drawer">运行详情</button>
+            </div>
           </div>
           <p class="overview-meta">
             共 2 份报告 · 建议 2 · 已采纳 1 · 已驳回 1 · 人工 0
@@ -1085,6 +1168,126 @@ button { font: inherit; }
       </div>
     </section>
 
+    <!-- ══════════════ 第 8 区：S15 汇报模式（覆盖层，v6 新增） ══════════════ -->
+    <section class="spec-section">
+      <h2 class="spec-title">08 S15 汇报模式（fixed 覆盖层）· 汇总页态 / 逐项页态 / 驳回大字弹窗 / 空议程态 · Trace M7-US1–US9</h2>
+      <p class="spec-note">
+        入口 = S1「汇报模式」主级按钮（01 区）或快捷键 P（工作台、无输入焦点时）；进入尝试 requestFullscreen，失败静默降级 CSS 全屏占位；打开焦点入容器，Esc 退模式焦点回入口按钮（M7-US9）；<b>弹窗打开时 Esc 只关弹窗</b>（G1''）；转场 fade ≤80ms。
+        键位：←/→ 上/下一条、Home/End 首末、G 汇总页、A 采纳、D 驳回（开弹窗）；采纳/驳回成功 → 留痕行 + 800ms 自动前进（末条回汇总页）；失败 aria-live 播报「保存失败，已恢复为服务器状态」并停留（G4''）。
+        排版验收口径 = 3 米可读（标题 clamp 28–44px、置信度 56px、引用 24px、仅引用块内滚）；本区为独立示例数据集（5 条待拍板），不与 01 区强一致。
+      </p>
+
+      <div class="app" aria-label="汇报模式演示">
+        <!-- 8a 汇总页（首页） -->
+        <p class="spec-note" style="margin-top: var(--sp-lg);">汇总页（M7-US1/2）：</p>
+        <div class="pres-stage">
+          <div>
+            <p class="pres-proj">门店运营</p>
+            <p class="pres-sub">线下门店经营周度复盘与行动跟踪</p>
+          </div>
+          <div class="range-seg" role="group" aria-label="范围">
+            <button type="button" class="filter-chip" aria-pressed="true">待拍板</button>
+            <button type="button" class="filter-chip" aria-pressed="false">全部</button>
+          </div>
+          <div class="stat-row">
+            <span class="stat"><span class="stat-num">3</span><span class="stat-label">报告</span></span>
+            <span class="stat"><span class="stat-num">5</span><span class="stat-label">建议</span></span>
+            <span class="stat"><span class="stat-num">2</span><span class="stat-label">高优</span></span>
+            <span class="stat"><span class="stat-num">1</span><span class="stat-label">已采纳</span></span>
+          </div>
+          <div>
+            <div class="dist-bar" role="img" aria-label="证据分布：数据支撑 2、多源佐证 1、逻辑推断 1、经验假设 1">
+              <span class="dist-seg ds-data" style="width: 40%;"></span>
+              <span class="dist-seg ds-corr" style="width: 20%;"></span>
+              <span class="dist-seg ds-inf" style="width: 20%;"></span>
+              <span class="dist-seg ds-ass" style="width: 20%;"></span>
+            </div>
+            <div class="dist-legend" style="margin-top: var(--sp-xs);">
+              <span><span class="legend-dot ld-data"></span>数据支撑 2</span>
+              <span><span class="legend-dot ld-corr"></span>多源佐证 1</span>
+              <span><span class="legend-dot ld-inf"></span>逻辑推断 1</span>
+              <span><span class="legend-dot ld-ass"></span>经验假设 1</span>
+            </div>
+          </div>
+          <ol class="agenda" aria-label="议程">
+            <li><button type="button" class="agenda-row" aria-current="true"><span class="agenda-no">01</span><span class="agenda-title">对连续三周复购下滑的高价值会员发放定向回归券</span><span class="chip pr-high pres-chip">高</span><span class="legend-dot ld-data"></span></button></li>
+            <li><button type="button" class="agenda-row"><span class="agenda-no">02</span><span class="agenda-title">调整周末档品类陈列，主推报告验证的高毛利组合</span><span class="chip pr-high pres-chip">高</span><span class="legend-dot ld-corr"></span></button></li>
+            <li><button type="button" class="agenda-row"><span class="agenda-no">03</span><span class="agenda-title">试点延长高流失门店的营业前准备时长</span><span class="chip pr-medium pres-chip">中</span><span class="legend-dot ld-inf"></span></button></li>
+            <li><button type="button" class="agenda-row"><span class="agenda-no">04</span><span class="agenda-title">增设午市套餐，提升工作日午间客流</span><span class="chip pr-medium pres-chip">中</span><span class="legend-dot ld-ass"></span></button></li>
+            <li><button type="button" class="agenda-row"><span class="agenda-no">05</span><span class="agenda-title">会员日主题陈列联动企微社群推送</span><span class="chip pr-low pres-chip">低</span><span class="legend-dot ld-data"></span></button></li>
+          </ol>
+          <p class="pres-keys">← → 切换 · Esc 退出</p>
+        </div>
+
+        <!-- 8b 逐项页（高优 · 数据支撑 · 大字版） -->
+        <p class="spec-note" style="margin-top: var(--sp-lg);">逐项页（M7-US3–7；人工项以「人工」大徽标替代置信度数字、无引用块，契约 2.18.3）：</p>
+        <div class="pres-stage">
+          <div class="pres-pageno">
+            <span aria-label="第 1 条，共 5 条">1 / 5</span>
+            <span class="range-tag">待拍板</span>
+          </div>
+          <h3 class="pres-title">对连续三周复购下滑的高价值会员发放定向回归券</h3>
+          <div class="pres-badges">
+            <span class="chip pr-high pres-chip">高</span>
+            <span class="chip neutral pres-chip">会员</span>
+            <span class="chip neutral pres-chip">短期</span>
+            <span class="chip neutral pres-chip">中</span>
+          </div>
+          <div class="pres-evidence">
+            <div class="conf-wrap">
+              <span class="conf-big">90%</span>
+              <span class="conf-big-label">置信度</span>
+            </div>
+            <blockquote class="pres-quote lv-data">高价值会员（近 180 天消费 ≥ 2 次）第 37–40 周复购率分别为 41.2%、38.6%、35.0%、31.4%，连续三周环比下降。</blockquote>
+            <button type="button" class="pres-collapse">推导过程 ▸（可展开）</button>
+          </div>
+          <p class="pres-line"><b>预期效果：</b>两周内该人群回购率回升 3–5 个百分点；券核销成本控制在可承受范围。</p>
+          <p class="pres-src">来源：会员运营周报-1012.md</p>
+          <div class="pres-actions">
+            <button type="button" class="btn-adopt-lg">采纳</button>
+            <button type="button" class="btn-dismiss-lg">驳回</button>
+          </div>
+          <p class="pres-keys">← → 切换 · Esc 退出</p>
+        </div>
+
+        <!-- 8c 驳回大字弹窗（打开态；S11 大字号变体） -->
+        <p class="spec-note" style="margin-top: var(--sp-lg);">驳回大字弹窗（M7-US6；D 键或驳回大钮触发；G10 规则沿用：≥2 字、error 逐字「请填写驳回理由（至少 2 个字）」；Esc 只关弹窗、焦点回驳回大钮——G1''）：</p>
+        <div class="dialog-stage">
+          <div class="dismiss-dialog dlg-lg" role="dialog" aria-modal="true" aria-labelledby="pdlg-title">
+            <h3 class="dlg-title" id="pdlg-title">驳回行动项</h3>
+            <p class="dlg-sub">对连续三周复购下滑的高价值会员发放定向回归券</p>
+            <div class="form-field wide">
+              <label for="pdlg-reason">驳回理由 <span class="req">*</span></label>
+              <textarea id="pdlg-reason" placeholder="例：数据仅覆盖两家门店，不足以支撑全部门店推广"></textarea>
+              <span class="score-hint">至少 2 个字</span>
+            </div>
+            <div class="form-actions">
+              <button type="button" class="btn-primary">确认驳回</button>
+              <button type="button" class="btn-plain">取消</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 8d 空议程态（G2''） -->
+        <p class="spec-note" style="margin-top: var(--sp-lg);">空议程态（G2''：无待拍板项进入不阻止，复盘仍可用；此态逐项页不可达）：</p>
+        <div class="pres-stage">
+          <div>
+            <p class="pres-proj">门店运营</p>
+            <p class="pres-sub">线下门店经营周度复盘与行动跟踪</p>
+          </div>
+          <div class="range-seg" role="group" aria-label="范围">
+            <button type="button" class="filter-chip" aria-pressed="true">待拍板</button>
+            <button type="button" class="filter-chip" aria-pressed="false">全部</button>
+          </div>
+          <div class="pres-empty">
+            <p style="margin: 0;">当前没有待拍板的建议</p>
+            <button type="button" class="btn-primary">查看全部</button>
+          </div>
+          <p class="pres-keys">← → 切换 · Esc 退出</p>
+        </div>
+      </div>
+    </section>
+
   </main>
 
   <!-- ══════════════ S-L 左栏项目导航（M6 v5）══════════════ -->
@@ -1173,9 +1376,9 @@ button { font: inherit; }
 
 <footer class="spec-footer">
   产物清单：.flow/ui/m5-board.html（本文件，单页静态、内联 CSS、无 JS；文件名沿 M5 沿用）｜契约：.flow/ui-contract.md（第 9 节）。
-  Shell ↔ Surface：三栏 = S-L 项目导航（M6-US1/4）+ 主区（当前项目看板）+ S-R 运行详情（全局账本，G4'）；当前项目记忆 = localStorage dp.activeProjectId（G7'，无路由）。
-  分区 ↔ Surface：01→S1/S1b/S6/S2/S3/S4/S5 + S12 补填（M6-US1–3/6/8/10，US2–4/8–12/19/20）｜02→S8-① 无项目空态（M6-US1/9，G4'；S7 演示态 v5 移除）｜03→S14 删除确认弹窗（M6-US1/5）｜04→S8-②③（US15）｜05→S9 含上传失败（US14/15/16，M6-US2/8，G2'/G5'）｜06→S10（M6-US3）｜07→S11+S13+人工项（US19/20）。
-  飞书审批卡片（S-EXT，US5–7/19）为外部表面，在看板窗口外渲染；G12 校准注入（含 v5 项目级过滤）无用户可见界面（负面用例 7）。
+  Shell ↔ Surface：三栏 = S-L 项目导航（M6-US1/4）+ 主区（当前项目看板）+ S-R 运行详情（全局账本，G4'）；当前项目记忆 = localStorage dp.activeProjectId（G7'，无路由）；S15 汇报模式 = fixed 覆盖层（M7-US1–9）。
+  分区 ↔ Surface：01→S1（含汇报模式主级按钮）/S1b/S6/S2/S3/S4/S5 + S12 补填｜02→S8-① 无项目空态｜03→S14 删除确认弹窗｜04→S8-②③｜05→S9 含上传失败｜06→S10｜07→S11+S13+人工项｜08→S15 汇报模式：汇总页/逐项页/驳回大字弹窗/空议程（M7-US1–US9，G1''–G4''）。
+  飞书审批卡片（S-EXT）为外部表面，在看板窗口外渲染；G12 校准注入无用户可见界面（负面用例 7）。
 </footer>
 
 </body>

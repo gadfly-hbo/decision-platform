@@ -63,3 +63,11 @@ verdict: PASS（无 blocking）。四点用户决策逐条落实（清空重建/
 Non-blocking 7 项：#1 同名 force 判定过窄（controller 裁定升格正确性修复）；#2 extracting 复位惰性化（同上）；#3 空测试；#4 陈旧标题；#5 slug 双份实现；#6 isDemo 残留字段；#7 上传无总量上限（0.0.0.0 部署后续加帽）。未验证项：真实模型冒烟未重跑（只读约束；首启清空旧库为既定行为需提示用户）。
 
 ## 修复轮（review_cycles=1）：#1 force 无条件化（同名任何状态一律 force，v1/v2/v3 序列测试钉死）；#2 extracting 自愈挂 board 加载路径（scanReports 内复位+inFlight 守卫）；#3 空测试补真（假通道+0 行动项不推）；#4 标题修正。157→159 全绿。
+
+---
+
+# M7 REVIEW（2026-10-13，两轮）
+
+第 1 轮 FAIL：B1 采纳失败仍前进/无播报/本地副本无回滚（/tmp 复现）；B2 拍板后按钮卸载焦点落 body，键盘流与 Esc 全断（/tmp 复现）。变异抽查确认快照/800ms/Esc 焦点归还有真实测试锁定。Non-blocking 8 项留档（aria-current 未实现/播报措辞/键位后缀术语/P 键未屏蔽弹窗/页间 fade 缺/多事实堆叠裁切/useProjects 形状校验范围外记录/采纳钮白字面量）。
+修复轮：store.adopt→Promise<boolean> 同构；doAdopt/doDismiss 失败停留+逐字播报+回滚；成功/失败路径 containerRef.focus()。+2 测试（采纳失败四断言；指针拍板焦点链+Esc）。
+第 2 轮聚焦复审 PASS；残留 2 处同类一行焦点缺口（采纳失败分支、议程直达）controller 直修补齐，B1 测试加固 toHaveFocus。

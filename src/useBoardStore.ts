@@ -51,7 +51,7 @@ export interface UploadOutcome {
 export interface BoardStore {
   /** 写操作失败标志（S9：列表底部 role=alert，已回滚服务器状态） */
   error: boolean
-  adopt(item: ActionItemView): void
+  adopt(item: ActionItemView): Promise<boolean>
   dismiss(item: ActionItemView, reason: string): Promise<boolean>
   backfill(item: ActionItemView, reason: string): Promise<boolean>
   /** 返回 false = 提交失败（已回滚），表单保持打开 */
@@ -133,7 +133,7 @@ export function useBoardStore(deps: BoardStoreDeps): BoardStore {
         decidedAt: new Date().toISOString(),
         decidedVia: 'board',
       }
-      void sendItemRequest(`/api/actions/${encodeURIComponent(item.id)}`, {
+      return sendItemRequest(`/api/actions/${encodeURIComponent(item.id)}`, {
         method: 'PATCH',
         body: JSON.stringify({ status: 'adopted', via: 'board' }),
       }, optimistic)

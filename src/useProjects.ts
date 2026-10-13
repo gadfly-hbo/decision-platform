@@ -48,7 +48,9 @@ export function useProjects(initial?: ProjectSummary[]): ProjectsState {
     try {
       const res = await fetch('/api/projects')
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const fetched = (await res.json()) as { projects: ProjectSummary[] }
+      const fetched = (await res.json()) as { projects?: ProjectSummary[] }
+      // 形状校验：畸形响应不腐蚀列表状态（与初始拉取同标准）
+      if (!Array.isArray(fetched.projects)) return null
       setProjects(fetched.projects)
       setError(false)
       return fetched.projects

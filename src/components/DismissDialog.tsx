@@ -10,13 +10,15 @@ interface DismissDialogProps {
   onClose(): void
   /** 关闭后焦点归还目标（触发它的「驳回」钮，G10） */
   returnFocusRef: React.RefObject<HTMLButtonElement | null>
+  /** S15 大字变体（2.18.3）：标题 ~28px / textarea ~20px / 宽 min(560px,90vw)；G10 规则与逐字文案完全复用 */
+  size?: 'base' | 'lg'
 }
 
 /**
  * S11 驳回理由弹窗（G10，全站唯一弹层）：原生 <dialog> + showModal，
  * 原生 Esc 关闭与焦点圈定；jsdom 等无 showModal 环境降级 open 属性。
  */
-export function DismissDialog({ itemTitle, onSubmit, onClose, returnFocusRef }: DismissDialogProps) {
+export function DismissDialog({ itemTitle, onSubmit, onClose, returnFocusRef, size = 'base' }: DismissDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [reason, setReason] = useState('')
@@ -61,7 +63,7 @@ export function DismissDialog({ itemTitle, onSubmit, onClose, returnFocusRef }: 
   }
 
   return (
-    <dialog ref={dialogRef} className="dismiss-dialog" aria-labelledby="dismiss-dialog-title">
+    <dialog ref={dialogRef} className={`dismiss-dialog${size === 'lg' ? ' dlg-lg' : ''}`} aria-labelledby="dismiss-dialog-title">
       <h2 id="dismiss-dialog-title" className="dismiss-dialog-title">
         驳回行动项
       </h2>

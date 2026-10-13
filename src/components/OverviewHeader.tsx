@@ -17,6 +17,9 @@ interface OverviewHeaderProps {
   onUpload(files: File[]): Promise<UploadOutcome[]>
   onExtract(report: ReportRecord, force?: boolean): void
   modelAvailable?: boolean
+  /** S15 入口（M7）：「汇报模式」主级按钮；ref 供模式关闭后焦点返回（M7-US9） */
+  presentationBtnRef?: React.RefObject<HTMLButtonElement | null>
+  onOpenPresentation(): void
 }
 
 /** S1 项目概览头（v5：项目名+purpose+项目内统计+通知 chip）+ S1b 报告区（上传报告 + 项目内报告列表） */
@@ -28,6 +31,8 @@ export function OverviewHeader({
   onUpload,
   onExtract,
   modelAvailable = true,
+  presentationBtnRef,
+  onOpenPresentation,
 }: OverviewHeaderProps) {
   const { suggested, adopted, dismissed, manual } = view.stats
   return (
@@ -38,16 +43,26 @@ export function OverviewHeader({
             <h1 className="page-title">{view.project.title}</h1>
             <p className="overview-lede">{view.project.purpose || DEFAULT_PROJECT_LEDE}</p>
           </div>
-          <button
-            ref={drawerBtnRef}
-            type="button"
-            className="drawer-toggle"
-            aria-expanded={drawerOpen}
-            aria-controls="run-drawer"
-            onClick={onToggleDrawer}
-          >
-            运行详情
-          </button>
+          <div className="overview-actions">
+            <button
+              ref={presentationBtnRef}
+              type="button"
+              className="primary-btn presentation-entry"
+              onClick={onOpenPresentation}
+            >
+              汇报模式
+            </button>
+            <button
+              ref={drawerBtnRef}
+              type="button"
+              className="drawer-toggle"
+              aria-expanded={drawerOpen}
+              aria-controls="run-drawer"
+              onClick={onToggleDrawer}
+            >
+              运行详情
+            </button>
+          </div>
         </div>
         <p className="overview-meta">
           共 {view.reports.length} 份报告 · 建议 {suggested} · 已采纳 {adopted} · 已驳回 {dismissed} · 人工 {manual}
