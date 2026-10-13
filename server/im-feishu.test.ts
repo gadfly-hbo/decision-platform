@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { feishuApprovalCard, feishuResultCard, startFeishuBridge, type CardActionLike, type FeishuChannelLike } from './im-feishu'
-import { closeBoardDb, createActionItem, getActionItem, openBoardDb, type BoardDb } from './db'
+import { closeBoardDb, createActionItem, createProject, getActionItem, openBoardDb, type BoardDb } from './db'
 import type { ApprovalCard } from './im'
 
 let dir = ''
@@ -13,8 +13,11 @@ beforeAll(() => {
 })
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
 
+let projectId = ''
+
 beforeEach(() => {
   db = openBoardDb(join(dir, `feishu-${Date.now()}-${Math.random().toString(36).slice(2)}.db`))
+  projectId = createProject(db, { title: '桥接项目' }).id
 })
 afterEach(() => {
   try {
@@ -37,6 +40,7 @@ const card: ApprovalCard = {
 
 function seedItem(title: string): string {
   return createActionItem(db, {
+    projectId,
     sourceKind: 'extracted',
     reportId: null,
     title,

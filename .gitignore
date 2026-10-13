@@ -9,6 +9,8 @@ data/actions.json
 data/im.json
 # M5 行动闭环 SQLite 库（运行期数据，不入库；PRD Further Notes）
 data/board.db
+# M6 项目报告文件目录（上传落盘 + 随项目硬删，不入库）
+data/projects/
 # M5 SDK 任务账本与审计（运行期数据，不入库；README 部署节）
 data/agent-ledger.json
 data/agent-ledger.json.audit.jsonl

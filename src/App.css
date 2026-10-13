@@ -224,10 +224,6 @@
   font-size: var(--fs-meta);
 }
 
-.status-cell {
-  display: inline-flex;
-  align-items: center;
-}
 
 .side-empty {
   margin: 0;
@@ -236,33 +232,10 @@
   font-size: var(--fs-meta);
 }
 
-/* 状态点（S-L 与 S1b 同源；色 + 文字双通道） */
-.status-dot {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  margin-right: 4px;
-  border-radius: 50%;
-  vertical-align: middle;
-  background: var(--text-3);
-}
 
-.status-dot.sd-pending {
-  background: var(--queue-ink);
-}
 
-.status-dot.sd-extracting {
-  background: var(--queue-ink);
-  animation: spin 1s linear infinite;
-}
 
-.status-dot.sd-done {
-  background: var(--ok);
-}
 
-.status-dot.sd-failed {
-  background: var(--fail);
-}
 
 .spinner {
   display: inline-block;
@@ -751,10 +724,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-.demo-mark {
-  color: var(--text-3);
-  font-size: var(--fs-meta);
-}
 
 /* 操作区（卡头下方常显） */
 .action-ops {
@@ -1263,21 +1232,7 @@
   }
 }
 
-/* ---- chip：演示/通知 ---- */
-
-.demo-chip {
-  display: inline-flex;
-  align-items: center;
-  margin-left: var(--sp-sm);
-  padding: 0 10px;
-  border-radius: var(--r-pill);
-  background: var(--warn-soft);
-  border: 1px solid var(--warn-line);
-  color: var(--warn);
-  font-size: var(--fs-meta);
-  line-height: 1.6;
-  vertical-align: middle;
-}
+/* ---- chip：通知 ---- */
 
 .notify-chip {
   display: inline-flex;
@@ -1321,7 +1276,7 @@
     position: static;
   }
 
-  .side-list {
+  .project-list {
     display: flex;
     gap: var(--sp-xs);
     overflow-x: auto;
@@ -1350,4 +1305,120 @@
   .head-meta {
     order: 3;
   }
+}
+
+/* ---- M6：项目导航 / 删除弹窗 / 引导卡 / 上传区 ---- */
+
+.project-create-toggle {
+  width: 100%;
+}
+
+.project-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--sp-xs);
+}
+
+.project-item {
+  display: grid;
+  gap: var(--sp-xs);
+}
+
+.project-item .side-item {
+  width: 100%;
+}
+
+.project-count-chip {
+  font-size: var(--fs-meta);
+}
+
+.project-mini-btn {
+  justify-self: end;
+  padding: 1px 8px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-2);
+  font: inherit;
+  font-size: var(--fs-meta);
+  cursor: pointer;
+}
+
+.project-del-btn:hover {
+  background: var(--fail-soft);
+  border-color: var(--fail-line);
+  color: var(--fail);
+}
+
+.project-form {
+  display: grid;
+  gap: var(--sp-sm);
+  padding: var(--sp-sm);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--soft);
+}
+
+.delete-project-body {
+  margin: 0 0 var(--sp-sm);
+  color: var(--text-2);
+  font-size: var(--fs-small);
+}
+
+.danger-btn {
+  padding: 3px 14px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--fail-line);
+  background: var(--fail-soft);
+  color: var(--fail);
+  font: inherit;
+  font-size: var(--fs-small);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.danger-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.project-guide {
+  justify-items: start;
+  text-align: left;
+  padding: var(--sp-lg);
+  display: grid;
+  gap: var(--sp-md);
+}
+
+.upload-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.report-strip-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-sm);
+}
+
+.upload-btn {
+  flex-shrink: 0;
+}
+
+.upload-progress {
+  margin: 0 0 var(--sp-sm);
+  color: var(--queue-ink);
+  font-size: var(--fs-small);
+}
+
+.report-strip .report-error {
+  display: block;
+  margin: var(--sp-xs) 0 0;
 }

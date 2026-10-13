@@ -24,8 +24,17 @@ export interface ActionEvidence {
   reasoning: string
 }
 
+export interface ProjectRecord {
+  id: string
+  title: string
+  purpose: string
+  createdAt: string
+  updatedAt: string
+}
+
 export interface ReportRecord {
   id: number
+  projectId: string
   slug: string
   filename: string
   status: ReportStatus
@@ -36,6 +45,7 @@ export interface ReportRecord {
 
 export interface ActionItemRecord {
   id: string
+  projectId: string
   reportId: number | null
   sourceKind: 'extracted' | 'manual'
   title: string
@@ -106,6 +116,18 @@ export interface BoardStats {
   manual: number
 }
 
+/** M6：项目列表条目（GET /api/projects 响应形状） */
+export interface ProjectSummary {
+  id: string
+  title: string
+  purpose: string
+  createdAt: string
+  updatedAt: string
+  actionCounts: BoardStats
+  /** 项目内最新 updated_at（空项目为空串） */
+  lastActivity: string
+}
+
 export interface ModelChainProvider {
   role: '主' | '备'
   provider: string
@@ -116,6 +138,8 @@ export interface ModelChainProvider {
 export interface BoardView {
   title: string
   lede: string
+  /** M6：项目根容器元信息（board 作用域） */
+  project: { id: string; title: string; purpose: string }
   reports: ReportRecord[]
   actionItems: ActionItemView[]
   stats: BoardStats
@@ -129,5 +153,6 @@ export interface BoardView {
     lastPushedReport?: string
   }
   modelChain: { available: boolean; providers: ModelChainProvider[] }
+  /** M5 遗留字段（v5 演示态退役）：后端仍返回，前端不再渲染——保留避免后端类型 churn */
   isDemo: boolean
 }

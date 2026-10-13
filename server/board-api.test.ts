@@ -1,15 +1,17 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Server } from 'node:http'
 import { startServer } from './index'
-import type { ExtractionRunner } from './agent/extract'
+import { closeBoardDb, createProject, insertExtractedActionItems, openBoardDb, updateReportStatus, upsertReport } from './db'
 import type { ActionItemDraft } from './agent/types'
 
 let dir: string
-let dataDir: string
+let dbPath: string
+let projectId: string
 let server: Server
+let portSeq = 0
 let port: number
 let base: string
 
@@ -23,37 +25,45 @@ const DRAFT: ActionItemDraft = {
   evidence: { facts: [{ text: '复购率下滑', quote: '复购率由 12% 降至 9%' }], level: '数据支撑', reasoning: '报告数据支持' },
 }
 
-const fakeRunner = (): ExtractionRunner => ({
-  async runExtraction() {
-    return [DRAFT]
-  },
-  async runExtractionRaw() {
-    throw new Error('not used')
-  },
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), 'dp-board-'))
+  dbPath = join(dir, 'board.db')
 })
 
-async function listen(): Promise<void> {
-  port = 8600 + Math.floor(Math.random() * 400)
+afterEach(async () => {
+  await new Promise<void>((resolve) => {
+    server.closeAllConnections?.()
+    server.close(() => resolve())
+  })
+  rmSync(dir, { recursive: true, force: true })
+})
+
+/** M6：直接在库文件造数（项目 + done 报告 + 抽取项），再起服务复用同一库（全局抽取端点已移除）；
+ *  itemTitles 为空 = 仅建项目（无报告无行动项，isDemo 用例）。 */
+async function listen(itemTitles: string[] = [DRAFT.title]): Promise<void> {
+  const db = openBoardDb(dbPath)
+  const project = createProject(db, { title: '测试项目' })
+  projectId = project.id
+  if (itemTitles.length > 0) {
+    const report = upsertReport(db, project.id, { slug: 'r1', filename: 'r1.md' })
+    updateReportStatus(db, report.id, 'done')
+    insertExtractedActionItems(db, project.id, report.id, itemTitles.map((title) => ({ ...DRAFT, title })))
+  }
+  closeBoardDb(db)
+
+  port = 8600 + (portSeq++ % 40)
   server = startServer(port, '127.0.0.1', {
-    dataDir,
-    dbPath: join(dir, 'board.db'),
-    agentRunner: fakeRunner(),
+    dbPath,
+    projectsDir: join(dir, 'projects'),
     notifyFile: join(dir, 'notify.json'),
     notifyStateFile: join(dir, 'notify-state.json'),
-    pushScanIntervalMs: 60_000_000,
-    pushScanFirstDelayMs: 60_000_000,
   })
   await new Promise((resolve) => server.on('listening', resolve))
   base = `http://127.0.0.1:${port}`
 }
 
-async function extract(): Promise<void> {
-  const res = await fetch(`${base}/api/reports/extract`, { method: 'POST', body: '{}' })
-  expect(res.ok).toBeTruthy()
-}
-
 async function firstItemId(): Promise<string> {
-  const board = await (await fetch(`${base}/api/dashboard`)).json()
+  const board = await (await fetch(`${base}/api/projects/${projectId}/board`)).json()
   return board.actionItems[0].id
 }
 
@@ -74,7 +84,7 @@ async function board(): Promise<{
   notify: { configured: boolean }
   modelChain: { available: boolean }
 }> {
-  return (await (await fetch(`${base}/api/dashboard`)).json()) as never
+  return (await (await fetch(`${base}/api/projects/${projectId}/board`)).json()) as never
 }
 
 async function patchAction(id: string, body: unknown): Promise<Response> {
@@ -85,25 +95,9 @@ async function patchAction(id: string, body: unknown): Promise<Response> {
   })
 }
 
-beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'dp-board-'))
-  dataDir = join(dir, 'raw')
-  mkdirSync(dataDir)
-})
-
-afterEach(async () => {
-  await new Promise<void>((resolve) => {
-    server.closeAllConnections?.()
-    server.close(() => resolve())
-  })
-  rmSync(dir, { recursive: true, force: true })
-})
-
-describe('GET /api/dashboard（M5 聚合新形状）', () => {
-  it('聚合报告、行动项（含任务/反馈嵌套）、统计、通知与模型链状态', async () => {
-    writeFileSync(join(dataDir, 'r1.md'), '报告')
+describe('GET /api/projects/:id/board（M6 项目 board 聚合）', () => {
+  it('聚合项目元信息、报告、行动项（含任务/反馈嵌套）、统计、通知与模型链状态', async () => {
     await listen()
-    await extract()
     const view = await board()
     expect(view.reports).toHaveLength(1)
     expect(view.actionItems).toHaveLength(1)
@@ -115,8 +109,8 @@ describe('GET /api/dashboard（M5 聚合新形状）', () => {
     expect(typeof view.modelChain.available).toBe('boolean')
   })
 
-  it('无报告时 isDemo=true（前端演示回退依据）', async () => {
-    await listen()
+  it('项目内无报告无行动项时 isDemo=true', async () => {
+    await listen([])
     const view = await board()
     expect(view.isDemo).toBe(true)
     expect(view.actionItems).toEqual([])
@@ -125,9 +119,7 @@ describe('GET /api/dashboard（M5 聚合新形状）', () => {
 
 describe('PATCH /api/actions/:id（G10 确认与驳回理由）', () => {
   it('看板驳回：缺理由 400；理由 <2 字 400；合规驳回落库留痕', async () => {
-    writeFileSync(join(dataDir, 'r1.md'), '报告')
     await listen()
-    await extract()
     const id = await firstItemId()
 
     const noReason = await patchAction(id, { status: 'dismissed', via: 'board' })
@@ -147,9 +139,7 @@ describe('PATCH /api/actions/:id（G10 确认与驳回理由）', () => {
   })
 
   it('卡片驳回：默认理由落库，看板可补填覆盖一次', async () => {
-    writeFileSync(join(dataDir, 'r1.md'), '报告')
     await listen()
-    await extract()
     const id = await firstItemId()
 
     const card = await patchAction(id, { status: 'dismissed', via: 'card', decidedBy: '审批人' })
@@ -168,9 +158,7 @@ describe('PATCH /api/actions/:id（G10 确认与驳回理由）', () => {
   })
 
   it('正常采纳留痕；改判驳回（adopted→dismissed）需理由；不存在 id 404', async () => {
-    writeFileSync(join(dataDir, 'r1.md'), '报告')
     await listen()
-    await extract()
     const id = await firstItemId()
 
     const adopt = await patchAction(id, { status: 'adopted', via: 'board', decidedBy: '老板' })
@@ -187,9 +175,7 @@ describe('PATCH /api/actions/:id（G10 确认与驳回理由）', () => {
   })
 
   it('重复驳回幂等：已 dismissed 再驳回同理由返回当前态', async () => {
-    writeFileSync(join(dataDir, 'r1.md'), '报告')
     await listen()
-    await extract()
     const id = await firstItemId()
     await patchAction(id, { status: 'dismissed', dismissedReason: '第一次理由', via: 'board' })
     const again = await patchAction(id, { status: 'dismissed', dismissedReason: '第一次理由', via: 'board' })
@@ -198,9 +184,7 @@ describe('PATCH /api/actions/:id（G10 确认与驳回理由）', () => {
   })
 
   it('已驳回项换理由再驳回 → 400 不可改写（N2：理由是沉淀的决策资产，补填是唯一入口）', async () => {
-    writeFileSync(join(dataDir, 'r1.md'), '报告')
     await listen()
-    await extract()
     const id = await firstItemId()
     await patchAction(id, { status: 'dismissed', dismissedReason: '第一次理由', via: 'board' })
 
@@ -218,18 +202,18 @@ describe('PATCH /api/actions/:id（G10 确认与驳回理由）', () => {
 
 describe('POST /api/actions（G11 人工补充建议）', () => {
   it('必填校验 + 证据固定经验假设 + 归组人工', async () => {
-    await listen()
+    await listen([]) // 仅项目（无抽取项），人工项为唯一 suggested
     const noTitle = await fetch(`${base}/api/actions`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ rationale: '有依据无标题' }),
+      body: JSON.stringify({ projectId, rationale: '有依据无标题' }),
     })
     expect(noTitle.status).toBe(400)
 
     const ok = await fetch(`${base}/api/actions`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ title: '上线会员日活动', rationale: '一线观察到周末客流高', priority: 'medium' }),
+      body: JSON.stringify({ projectId, title: '上线会员日活动', rationale: '一线观察到周末客流高', priority: 'medium' }),
     })
     expect(ok.status).toBe(200)
     const item = (await ok.json()) as ActionItemView & { sourceKind: string; evidenceLevel: string; confidence: number | null }
@@ -246,9 +230,7 @@ describe('POST /api/actions（G11 人工补充建议）', () => {
 
 describe('任务与反馈', () => {
   it('任务 CRUD 三态与反馈一任务一条（覆盖语义）', async () => {
-    writeFileSync(join(dataDir, 'r1.md'), '报告')
     await listen()
-    await extract()
     const itemId = await firstItemId()
 
     const createTask = await fetch(`${base}/api/actions/${itemId}/tasks`, {
@@ -310,9 +292,7 @@ describe('任务与反馈', () => {
 
 describe('DELETE /api/actions/:id（B3：PRD/契约声明的 API 补齐；不设 UI 按钮）', () => {
   it('删除后 dashboard 消失，任务/反馈外键级联清理；不存在 id 404', async () => {
-    writeFileSync(join(dataDir, 'r1.md'), '报告')
     await listen()
-    await extract()
     const id = await firstItemId()
 
     // 采纳 → 挂任务 → 回录反馈，验证级联清理

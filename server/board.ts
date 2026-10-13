@@ -6,6 +6,7 @@ import {
   getActionFeedback,
   getActionItem,
   getActionTask,
+  getProject,
   listActionItems,
   listAllFeedback,
   listAllTasks,
@@ -55,12 +56,16 @@ function taskView(task: ActionTaskRecord, feedbackByTask: Map<string, ActionFeed
   }
 }
 
+/** M6：项目作用域 board 聚合；项目不存在 → null（路由层 404）。 */
 export function buildBoardView(
   db: BoardDb,
+  projectId: string,
   options: { notifyConfigured: boolean; imConfigured?: boolean; lastPushedReport?: string },
-): BoardView {
-  const reports = listReports(db)
-  const items = listActionItems(db)
+): BoardView | null {
+  const project = getProject(db, projectId)
+  if (!project) return null
+  const reports = listReports(db, projectId)
+  const items = listActionItems(db, { projectId })
   const tasks = listAllTasks(db)
   const feedback = listAllFeedback(db)
   const feedbackByTask = new Map(feedback.map((fb) => [fb.taskId, fb]))
@@ -74,6 +79,7 @@ export function buildBoardView(
   return {
     title: '决策看板',
     lede: LEDE,
+    project: { id: project.id, title: project.title, purpose: project.purpose },
     reports,
     actionItems,
     stats: {
@@ -199,6 +205,7 @@ export function removeActionItem(db: BoardDb, id: string): { ok: true } | { ok: 
 // ---- G11：人工补充建议 ----
 
 export interface ManualActionInput {
+  projectId?: unknown
   title?: unknown
   rationale?: unknown
   scene?: unknown
@@ -213,7 +220,8 @@ export type ManualActionOutcome =
   | { ok: true; item: ActionItemView }
   | { ok: false; status: number; error: string }
 
-export function createManualAction(db: BoardDb, input: ManualActionInput): ManualActionOutcome {
+export function createManualAction(db: BoardDb, projectId: string, input: ManualActionInput): ManualActionOutcome {
+  if (!getProject(db, projectId)) return { ok: false, status: 404, error: `项目不存在：${projectId}` }
   const title = typeof input.title === 'string' ? input.title.trim() : ''
   const rationale = typeof input.rationale === 'string' ? input.rationale.trim() : ''
   if (!title) return { ok: false, status: 400, error: '标题必填' }
@@ -225,6 +233,7 @@ export function createManualAction(db: BoardDb, input: ManualActionInput): Manua
   const expectedImpact = typeof input.expectedImpact === 'string' && input.expectedImpact.trim() !== '' ? input.expectedImpact.trim() : '待评估'
   const reportId = typeof input.reportId === 'number' ? input.reportId : null
   const id = createActionItem(db, {
+    projectId,
     sourceKind: 'manual',
     reportId,
     title,

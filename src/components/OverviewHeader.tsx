@@ -1,32 +1,42 @@
 import { useEffect, useRef, useState } from 'react'
-import { REPORT_STATUS_LABELS, formatDateTime } from '../data'
 import type { BoardView, ReportRecord } from '../data'
+import { REPORT_STATUS_LABELS, formatDateTime } from '../data'
+import type { UploadOutcome } from '../useBoardStore'
 
-export const REEXTRACT_HINT =
-  '重新抽取将删除该报告中仍处「建议」状态的行动项；已采纳/已驳回/含任务的行动项保留'
+export const REGENERATE_HINT =
+  '重新生成将删除该报告中仍处「建议」状态的行动项；已采纳/已驳回/含任务的行动项保留'
 export const EXTRACTING_MESSAGE = '正在抽取行动项，模型调用最长约 2 分钟，完成后自动刷新。'
 export const MODEL_UNAVAILABLE_MESSAGE = '模型服务不可用：未配置 API 密钥，无法抽取行动项。配置密钥后点击重试。'
-export const DEMO_NOTE = '当前为演示数据：将分析报告（.md/.txt）放入 data/raw/ 后自动抽取真实行动项。'
+export const DEFAULT_PROJECT_LEDE = '报告驱动的行动闭环'
 
 interface OverviewHeaderProps {
   view: BoardView
   drawerOpen: boolean
   drawerBtnRef: React.RefObject<HTMLButtonElement | null>
   onToggleDrawer(): void
+  onUpload(files: File[]): Promise<UploadOutcome[]>
   onExtract(report: ReportRecord, force?: boolean): void
+  modelAvailable?: boolean
 }
 
-/** S1 概览头（统计/通知/演示/错误 chip + 运行详情开关）+ S1b 报告状态条 */
-export function OverviewHeader({ view, drawerOpen, drawerBtnRef, onToggleDrawer, onExtract }: OverviewHeaderProps) {
-  const latest = view.reports[0]
+/** S1 项目概览头（v5：项目名+purpose+项目内统计+通知 chip）+ S1b 报告区（上传报告 + 项目内报告列表） */
+export function OverviewHeader({
+  view,
+  drawerOpen,
+  drawerBtnRef,
+  onToggleDrawer,
+  onUpload,
+  onExtract,
+  modelAvailable = true,
+}: OverviewHeaderProps) {
   const { suggested, adopted, dismissed, manual } = view.stats
   return (
     <>
       <header className="overview">
         <div className="overview-row">
           <div className="overview-heading">
-            <h1 className="page-title">{view.title}</h1>
-            <p className="overview-lede">{view.lede}</p>
+            <h1 className="page-title">{view.project.title}</h1>
+            <p className="overview-lede">{view.project.purpose || DEFAULT_PROJECT_LEDE}</p>
           </div>
           <button
             ref={drawerBtnRef}
@@ -40,33 +50,24 @@ export function OverviewHeader({ view, drawerOpen, drawerBtnRef, onToggleDrawer,
           </button>
         </div>
         <p className="overview-meta">
-          {latest && <>最新报告 {latest.filename} · {formatDateTime(latest.importedAt)} 导入 · </>}
           共 {view.reports.length} 份报告 · 建议 {suggested} · 已采纳 {adopted} · 已驳回 {dismissed} · 人工 {manual}
-          {view.isDemo && <span className="chip demo-chip">演示数据</span>}
-          <NotifyChip notify={view.notify} />
+          <NotifyChip notify={view.notify} projectTitle={view.project.title} />
         </p>
         {!view.modelChain.available && <p className="board-error">{MODEL_UNAVAILABLE_MESSAGE}</p>}
-        {view.isDemo && <p className="demo-note">{DEMO_NOTE}</p>}
       </header>
-      {view.reports.length > 0 && (
-        <ReportStrip reports={view.reports} modelAvailable={view.modelChain.available} onExtract={onExtract} />
-      )}
+      <ReportZone view={view} onUpload={onUpload} onExtract={onExtract} modelAvailable={modelAvailable} />
     </>
   )
 }
 
-interface ReportStripProps {
-  reports: ReportRecord[]
-  modelAvailable: boolean
-  onExtract(report: ReportRecord, force?: boolean): void
-}
-
-/** S1 通知 chip 四态（契约 2.1）：IM 已推/未推、webhook 降级、均未配置 */
-function NotifyChip({ notify }: { notify: BoardView['notify'] }) {
+/** S1 通知 chip 四态（v5：`已推送 · {项目名}/{报告名}` 短形态，G5'） */
+function NotifyChip({ notify, projectTitle }: { notify: BoardView['notify']; projectTitle: string }) {
   if (!notify.configured) return <span className="chip notify-chip warn">推送未配置</span>
   if (notify.imConfigured) {
     return notify.lastPushedReport ? (
-      <span className="chip notify-chip">已推送 · {notify.lastPushedReport}</span>
+      <span className="chip notify-chip">
+        已推送 · {projectTitle}/{notify.lastPushedReport}
+      </span>
     ) : (
       <span className="chip notify-chip warn">已配置 · 未推送</span>
     )
@@ -74,19 +75,64 @@ function NotifyChip({ notify }: { notify: BoardView['notify'] }) {
   return <span className="chip notify-chip warn">未配置飞书 · 文本摘要推送</span>
 }
 
-/** S1b 报告状态条：状态四态 + 抽取/重试/两段式重新抽取；与 S-L 状态点同源（G14） */
-function ReportStrip({ reports, modelAvailable, onExtract }: ReportStripProps) {
-  const extracting = reports.some((report) => report.status === 'extracting')
+interface ReportZoneProps {
+  view: BoardView
+  onUpload(files: File[]): Promise<UploadOutcome[]>
+  onExtract(report: ReportRecord, force?: boolean): void
+  modelAvailable?: boolean
+}
+
+/** S1b 报告区（v5）：「上传报告」主按钮（隐藏 input，多文件 .md/.txt）+ 项目内报告列表四态 */
+function ReportZone({ view, onUpload, onExtract, modelAvailable }: ReportZoneProps) {
+  const inputRef = useRef<HTMLInputElement>(null)
+  const [uploading, setUploading] = useState(false)
+  const [failures, setFailures] = useState<UploadOutcome[]>([])
+  const extracting = view.reports.some((report) => report.status === 'extracting')
+
+  const pick = async (fileList: FileList | null) => {
+    if (!fileList || fileList.length === 0) return
+    const files = Array.from(fileList)
+    setUploading(true)
+    const outcomes = await onUpload(files)
+    setUploading(false)
+    setFailures(outcomes.filter((it) => !it.ok)) // 失败项独立列表项呈现（G2' 单败不连锁）
+    if (inputRef.current) inputRef.current.value = '' // 同名文件可重选
+  }
+
   return (
-    <section className="report-strip" aria-label="报告状态">
+    <section className="report-strip" aria-label="报告">
+      <div className="report-strip-head">
+        <h3 className="run-section-title">报告</h3>
+        <input
+          ref={inputRef}
+          type="file"
+          accept=".md,.txt"
+          multiple
+          className="upload-input"
+          onChange={(event) => void pick(event.target.files)}
+        />
+        <button type="button" className="primary-btn upload-btn" disabled={uploading} onClick={() => inputRef.current?.click()}>
+          上传报告
+        </button>
+      </div>
+      {uploading && (
+        <p className="upload-progress" aria-live="polite">
+          上传中
+        </p>
+      )}
       {extracting && (
         <p className="extract-live" aria-live="polite">
           {EXTRACTING_MESSAGE}
         </p>
       )}
+      {failures.map((failure) => (
+        <p key={failure.filename} className="report-error">
+          上传失败：{failure.error}
+        </p>
+      ))}
       <ul className="report-strip-list">
-        {reports.map((report) => (
-          <ReportStripItem key={report.id} report={report} modelAvailable={modelAvailable} onExtract={onExtract} />
+        {view.reports.map((report) => (
+          <ReportStripItem key={report.id} report={report} onExtract={onExtract} modelAvailable={modelAvailable} />
         ))}
       </ul>
     </section>
@@ -95,14 +141,14 @@ function ReportStrip({ reports, modelAvailable, onExtract }: ReportStripProps) {
 
 function ReportStripItem({
   report,
-  modelAvailable,
   onExtract,
+  modelAvailable,
 }: {
   report: ReportRecord
-  modelAvailable: boolean
   onExtract(report: ReportRecord, force?: boolean): void
+  modelAvailable?: boolean
 }) {
-  // 两段式重新抽取（G3）：首点变「确认重新抽取」+ 删除范围提示，失焦或 3 秒未点自动还原
+  // 重新生成两段式（G3 沿用）：首点变「确认重新生成」+ 删除范围提示，失焦或 3 秒未点自动还原
   const [armed, setArmed] = useState(false)
   const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
@@ -144,14 +190,14 @@ function ReportStripItem({
       {report.status === 'done' &&
         (armed ? (
           <span className="force-confirm">
-            <span className="force-hint">{REEXTRACT_HINT}</span>
+            <span className="force-hint">{REGENERATE_HINT}</span>
             <button type="button" className="extract-btn" onClick={confirmForce}>
-              确认重新抽取
+              确认重新生成
             </button>
           </span>
         ) : (
           <button type="button" className="extract-btn" onClick={arm} onBlur={() => setArmed(false)}>
-            重新抽取
+            重新生成
           </button>
         ))}
     </li>

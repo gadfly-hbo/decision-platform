@@ -3,8 +3,7 @@ import { dirname } from 'node:path'
 import type { BoardView } from '../src/data/types'
 import { buildApprovalCards, type ApprovalCard } from './im'
 import { buildBoardView } from './board'
-import type { ExtractResult, ReportPipeline } from './reports'
-import type { ExtractionRunner } from './agent/extract'
+import type { BoardDb } from './db'
 
 export type NotifyPlatform = 'feishu' | 'dingtalk' | 'wecom' | 'generic'
 
@@ -73,9 +72,19 @@ export function markSlugPushed(stateFile: string, slug: string): void {
   writeNotifyState(stateFile, { pushedSlugs: [...state.pushedSlugs, slug] })
 }
 
-/** 最近一次成功推送的报告 slug（BoardView.notify.lastPushedReport 数据源） */
-export function latestPushedSlug(state: NotifyState): string | undefined {
-  return state.pushedSlugs.at(-1)
+/** M6 推送幂等键：projectId:slug（同 slug 跨项目互不影响） */
+export function projectPushKey(projectId: string, slug: string): string {
+  return `${projectId}:${slug}`
+}
+
+/** 项目最近一次成功推送的报告 slug（BoardView.notify.lastPushedReport 数据源；取键的 slug 段） */
+export function latestPushedSlugOfProject(state: NotifyState, projectId: string): string | undefined {
+  const prefix = `${projectId}:`
+  for (let i = state.pushedSlugs.length - 1; i >= 0; i--) {
+    const key = state.pushedSlugs[i]
+    if (key.startsWith(prefix)) return key.slice(prefix.length)
+  }
+  return undefined
 }
 
 /** 行动闭环周摘要（M5）：本周报告 N 份、建议 X / 已采纳 Y / 已驳回 Z / 人工补充 M */
@@ -119,88 +128,44 @@ export interface ImPushChannel {
   sendApproval(digest: string, cards: ApprovalCard[]): Promise<void>
 }
 
-export type PushFunnelReason = 'no-runner' | 'not-configured'
-
-export interface PushFunnelResult {
-  /** 本次 tick 自动抽取的结果（无 runner 时为空） */
-  extracted: ExtractResult[]
-  /** 本次 tick 成功推送的报告 slug（每 slug 只推一轮） */
-  pushedSlugs: string[]
-  reason?: PushFunnelReason
+/** 行动闭环摘要：项目版 = 【项目名】 + M5 行动摘要文本（手动重推与自动推送共用口径） */
+export function buildProjectDigest(view: BoardView): string {
+  return `【${view.project.title}】\n${buildWeeklyDigest(view)}`
 }
 
-export interface PushFunnelArgs {
-  pipeline: ReportPipeline
-  /** 抽取 runner；缺席（未配置密钥等）跳过自动抽取并日志一次 */
-  agentRunner: ExtractionRunner | null
+export interface ProjectPushArgs {
+  db: BoardDb
+  projectId: string
+  slug: string
   notifyFile: string
   notifyStateFile: string
-  /** IM 通道优先（文本+高优卡片）；缺席回落群机器人 webhook 文本摘要 */
   imChannel?: ImPushChannel
 }
 
-let noRunnerLogged = false
-
-/** 推送漏斗：扫描 → 自动抽取 pending/failed → 每个未推送的 done 报告发一轮（IM 文本+高优卡片 / webhook 降级） */
-export async function runPushFunnel(args: PushFunnelArgs): Promise<PushFunnelResult> {
-  let extracted: ExtractResult[] = []
-  if (!args.agentRunner) {
-    if (!noRunnerLogged) {
-      noRunnerLogged = true
-      console.warn('[notify] 未注入抽取 runner，跳过自动抽取（配置密钥后下轮自动补抽）')
-    }
-  } else {
-    extracted = await args.pipeline.extract(args.agentRunner, {})
-  }
-
-  const config = readNotifyConfig(args.notifyFile)
-  if (!args.imChannel && !config) return { extracted, pushedSlugs: [], reason: 'not-configured' }
-
-  const view = buildBoardView(args.pipeline.db, { notifyConfigured: true })
-  const state = readNotifyState(args.notifyStateFile)
-  // 导入时间正序推送（view.reports 为倒序）；每报告 slug 只推一轮（G8 幂等）
-  const unpushed = [...view.reports]
-    .reverse()
-    .filter((report) => report.status === 'done' && !isSlugPushed(state, report.slug))
-
-  const pushedSlugs: string[] = []
-  for (const report of unpushed) {
-    const digest = buildWeeklyDigest(view)
-    const cards = buildApprovalCards(view, { reportId: report.id })
+/**
+ * 抽取完成事件驱动推送（M6-T2，G3'：替代已退役的全局调度器）：每 projectId:slug 一轮（幂等）；
+ * 无通道配置跳过；发送失败记日志不上抛——推送是旁路，不阻塞抽取状态。
+ */
+export async function pushProjectReport(args: ProjectPushArgs): Promise<void> {
+  try {
+    const config = readNotifyConfig(args.notifyFile)
+    if (!args.imChannel && !config) return
+    const key = projectPushKey(args.projectId, args.slug)
+    if (isSlugPushed(readNotifyState(args.notifyStateFile), key)) return
+    const view = buildBoardView(args.db, args.projectId, { notifyConfigured: true })
+    if (!view) return
+    const report = view.reports.find((it) => it.slug === args.slug && it.status === 'done')
+    if (!report) return
+    const digest = buildProjectDigest(view)
     if (args.imChannel) {
-      await args.imChannel.sendApproval(digest, cards)
+      await args.imChannel.sendApproval(digest, buildApprovalCards(view, { reportId: report.id }))
     } else {
       await sendNotification(config!, digest)
     }
-    markSlugPushed(args.notifyStateFile, report.slug)
-    pushedSlugs.push(report.slug)
+    markSlugPushed(args.notifyStateFile, key)
+  } catch (error) {
+    console.warn('[notify] 抽取完成推送失败（不阻塞抽取状态）：', (error as Error).message)
   }
-  return { extracted, pushedSlugs }
 }
 
-/** 推送调度：启动后先扫一次（重启即补推），此后按间隔重复；返回停止函数（server.close 时调用） */
-export function startPushScheduler(
-  scan: () => Promise<unknown>,
-  intervalMs = 60_000,
-  firstDelayMs = 2_000,
-): () => void {
-  let stopped = false
-  let first: ReturnType<typeof setTimeout> | undefined
-  const tick = (): void => {
-    void scan().catch((error: unknown) => {
-      console.warn('[notify] 定时推送失败：', (error as Error).message)
-    })
-  }
-  first = setTimeout(() => {
-    first = undefined
-    if (!stopped) tick()
-  }, firstDelayMs)
-  const timer = setInterval(() => {
-    if (!stopped) tick()
-  }, intervalMs)
-  return () => {
-    stopped = true
-    if (first) clearTimeout(first)
-    clearInterval(timer)
-  }
-}
+/* M6 G3'：startPushScheduler 调度器与全局扫描漏斗随项目化退役；推送由抽取完成处事件驱动（pushProjectReport）。 */

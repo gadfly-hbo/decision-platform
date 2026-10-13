@@ -1,48 +1,47 @@
-# 提案：decision-platform 重构为报告驱动的行动闭环看板（M5）
+# 提案：decision-platform M6 — 项目化看板（Project-scoped Board）
 
-日期：2026-10-12。来源：用户与 Agent 的重构讨论（本次会话），决策以用户原话为准。
+日期：2026-10-13。来源：用户在 M5 交付后的方向修正（本会话），决策以用户原话与确认为准。
 
 ## 用户原话（决策锚点）
 
-> 我想你参考 pi-xanthil Actions 的方式进行重构，本质上我们的输入物就是报告，而不是数据，与 pi-xanthil Actions 一致的。
-> 飞书卡片审核功能可以保留。其余都改成与 pi-xanthil Actions 一致。如果你有更好的优化点也可以放进来。
-> -----
-> pi-sdk 接入采用 pi-agent-runtime 0.4.1
-> 开发流程调用 dev-flow
+> 将 md 等文档放入文件夹，然后自动出现在这里方式不合适。需要能创建一个个项目，这个看板是挂在项目下面的。每个项目里面上传报告或者从 juanerai 读取报告后生成看板。也是 agent 生成看板的模式。先输出修改的方向给我确认。
+
+方向确认稿四点回复（2026-10-13，逐字）：
+
+> 1. 直接清空
+> 2. JuanerAI 对接深度暂时不做，后续再安排
+> 3. 飞书全局一套
+> 4. 硬删+确认弹窗，个人工具不需归档复杂度
 
 ## 已确认的决策（约束，后续阶段不得推翻）
 
-1. **输入物换成报告**：产品输入是已输出的数据分析报告（文本），不再是会员周报 CSV 原始数据。现有「CSV 解析 → 规则引擎 → 结论」管线整体退役。
-2. **对齐 pi-xanthil Actions 模式**，完整闭环四段：
-   - **生成决策建议**：LLM 从报告抽取行动项（title / rationale / scene / lifecycle / expectedImpact / priority / effort / 结构化 evidence：facts 带报告原文逐字引用、四级证据等级、reasoning；confidence 由证据确定性派生，忽略 LLM 自评）。
-   - **确认行动**：行动项状态机 suggested → adopted / dismissed。
-   - **执行**：行动项下拆任务（owner / dueDate / status / priority / note）。
-   - **执行后反馈**：每任务一条反馈（adopted / outcome / metricDelta / review / score）。
-3. **飞书卡片审批保留**：现有 M4 移动审批（长连接、卡片直审、幂等、留痕）保留，审批对象改为新行动项（采纳/驳回映射 adopted/dismissed）。
-4. **LLM 接入用 pi-agent-runtime 0.4.1 SDK**（不是 pi-xanthil 的 pi CLI 子进程方式）：结构化抽取任务用 `runWorker`（无工具单次模型调用 + 宿主 validator），遵守 AGENT-RUNTIME.md 接入标准（显式模型/transport/密钥、授权回调、BudgetStore 任务账本、AuditSink 审计、输出按 schema 校验）。
-5. **开发流程走 dev-flow**（本流程）。
+1. **项目容器模型**：看板挂在项目下。Project（创建/重命名/删除）为根，报告、行动项、任务、反馈全部挂项目。
+2. **全局目录监听方式废弃**：`data/raw/` 扫描、全局报告注册、全局 60s 调度抽取退役；抽取由项目事件驱动（上传完成自动触发 + 项目内手动重新生成）。
+3. **报告进入方式 = 上传**：项目内「上传报告」按钮（.md/.txt），文件存项目目录；上传即触发 agent 抽取（复用现有状态机 pending/extracting/done/failed）。
+4. **JuanerAI 对接不做**：本里程碑范围外，列后续候选（不设占位 UI）。
+5. **飞书全局一套**：im.json 不变，推送漏斗带项目上下文即可，不做项目级审批人配置。
+6. **删除语义 = 硬删 + 确认弹窗**：删项目连报告文件与库内数据一起清；不做归档。
+7. **存量数据直接清空**：M5 的 `data/board.db` 不迁移，全新项目模型起步（M5 未投产）。
+8. **agent 生成看板模式保留**：runWorker 抽取管线是引擎；G12 校准注入升级为项目级（本项目历史驳回理由+人工补充）。
+9. 开发流程走 dev-flow（本流程）。
 
-## 允许的优化点（用户明示授权「更好的优化点也可以放进来」，需在 PRD 中列明）
+## 范围内（方向确认稿已列，用户未反对）
 
-- 候选（调查已支持，PRD/GRILL 定案）：报告放入目录后自动检测 → 抽取 → 推送（复用现有幂等推送调度器思路）；行动项/任务/反馈用 SQLite（node:sqlite）替换 data/*.json；报告身份与去重键；飞书卡片带证据摘要。
+- 存储：`projects` 表 + 既有四表挂 `project_id`；报告文件存 `data/projects/<projectId>/reports/`。
+- API：项目 CRUD（含硬删）；看板/报告/行动项/任务/反馈端点加项目作用域或校验归属。
+- UI：左栏 S-L 从报告导航改为**项目导航**（新建项目、项目列表含活动/计数、切换、删除确认弹窗——参考 report-factory wb-sidebar 结构不抄样式）；主区概览头带项目名；报告条升级为「上传报告」+ 项目内报告列表（状态/重新生成）；S2-S5 行动闭环 UI、S-R 运行详情抽屉、驳回弹窗等 M5 能力不动。
+- 推送漏斗：按项目触发（新报告抽取完成后推送，摘要带项目名）；幂等键 = 项目内报告标识。
 
-## 被否决的方案（不再讨论）
+## 被否决的方案
 
-- 保留 CSV 数据管线与规则引擎作为并行输入源（与「输入物就是报告」冲突）。
-- 直接复制 pi-xanthil 的 pi CLI 子进程接法（用户指定 pi-agent-runtime 0.4.1）。
-- 黄金策（Golden Strategy）式框架图生成（用户明确「不对，不是这个黄金策」）。
-
-## 调查结论（方案依据，已核实）
-
-- pi-xanthil Actions 实现：`server/src/routes/viz.ts:691-870`（extract 端点 + prompt 约束 + parseActionDraftsFromLlm/parseActionEvidence/deriveActionConfidence）、`server/src/db/viz.ts:78-123`（action_items/action_tasks/action_feedback 三表）、前端 `web/src/components/ActionsPane.tsx`（证据四级色标、过滤、任务/反馈 UI）。
-- pi-agent-runtime 0.4.1：`createRuntime({model, transport, authorize, audit, budgets})` → `runWorker<T>({validate})`；宿主需 ModelConfig+createPiTransport（显式 apiKey）、Authorization、AuditSink（append 即持久确认）、BudgetStore（同任务唯一 lease）。参考采用：`reports-factory`（`file:vendor/pi-agent-runtime-0.4.1.tgz`，model.ts / audit.ts / authorize.ts / budget-store.ts，密钥读 `~/.pi/agent/auth.json`，MiniMax-M3 主 + mimo-v2.6-flash 备）。
-- 本仓库现状：M1-M4 已交付（README 路线）；后端 node:http + tsx，前端 React+Vite+ECharts；飞书长连接桥 `server/im-feishu.ts`；推送调度 `server/notify.ts`；行动存储 data/actions.json；测试 vitest，`npm run verify` 三重门。
+- 继续/保留全局目录监听（与决策 2 冲突）。
+- 软删归档、项目级审批人配置、JuanerAI 对接（决策 3/4/6）。
+- 存量数据迁移（决策 7）。
 
 ## 未决问题（GRILL 填补，不得与上面冲突）
 
-- 报告来源目录与格式约定（沿用 data/raw/ 改放 md/txt？）与报告身份键。
-- 存储选型（SQLite vs JSON 文件）及现有 data/actions.json 历史数据处理。
-- 前端形态：现有结论看板组件（ConclusionCard/DerivationChain 等）去留与替换范围。
-- 模型主备链与单次保护参数（预算、超时、输出上限）取值。
-- 现有 webhook 文本推送（notify.ts）与新卡片推送的关系。
-- 演示数据回退（isDemo）是否保留。
+- 项目内报告身份/去重键（文件名 slug 项目内唯一？同名覆盖语义）。
+- 上传的并发/大小限制与非法文件处理。
+- 通知 chip 四态与项目维度的呈现（无项目空态）。
+- 无项目时的首屏（引导新建项目 vs 演示态去留）。
+- `/api/dashboard` 全局端点去留（改为 /api/projects/:id/board 后旧端点是否保留）。

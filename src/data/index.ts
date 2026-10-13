@@ -1,5 +1,4 @@
 export * from './types'
-export { demoBoardView } from './demo'
 export {
   formatDateTime,
   formatConfidence,

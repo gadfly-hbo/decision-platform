@@ -17,6 +17,7 @@ export const MODEL_SELF_EVAL_NOTE = '证据等级由提取模型自评，未做�
 export type StatusFilter = 'all' | ActionItemStatus
 export type EvidenceFilter = 'all' | (typeof EVIDENCE_LEVELS)[number]
 export type PriorityFilter = 'all' | 'high' | 'medium' | 'low'
+export type ReportFilter = 'all' | 'manual' | number
 
 interface ActionFiltersProps {
   items: ActionItemView[]

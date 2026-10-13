@@ -1,44 +1,49 @@
 import { DatabaseSync } from 'node:sqlite'
 import { randomUUID } from 'node:crypto'
-import type { ActionItemDraft } from './agent/types'
+import { existsSync, mkdirSync, rmSync } from 'node:fs'
+import { dirname } from 'node:path'
+import type { ActionEvidence, ActionItemDraft } from './agent/types'
 import type {
-  ActionEvidence,
   ActionFeedbackRecord,
   ActionItemRecord,
   ActionItemStatus,
   ActionTaskRecord,
   ActionTaskStatus,
+  ProjectRecord,
   ReportRecord,
   ReportStatus,
 } from '../src/data/types'
 
 /**
- * 行动闭环存储（M5）：node:sqlite 单文件库。
- * schema 对齐 pi-xanthil Actions 三表 + reports 表；幂等键与级联语义见 .flow/prd.md。
+ * 行动闭环存储（M6 项目化）：node:sqlite 单文件库。
+ * projects 为根容器（uuid），reports/action_items 直挂 project_id（外键级联）；tasks/feedback 经级联不变。
+ * schema 迁移策略 = 清空重建（用户决策）：打开时无 projects 表的 M5 旧库直接删文件重建。
  */
 
-export type {
-  ActionFeedbackRecord,
-  ActionItemRecord,
-  ActionItemStatus,
-  ActionTaskRecord,
-  ActionTaskStatus,
-  ReportRecord,
-  ReportStatus,
-} from '../src/data/types'
+export type { ActionFeedbackRecord, ActionItemRecord, ActionItemStatus, ActionTaskRecord, ActionTaskStatus, ProjectRecord, ReportRecord, ReportStatus } from '../src/data/types'
 
 const SCHEMA = `
+CREATE TABLE IF NOT EXISTS projects (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  purpose TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS reports (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  slug TEXT NOT NULL UNIQUE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  slug TEXT NOT NULL,
   filename TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending',
   error TEXT,
   imported_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  UNIQUE (project_id, slug)
 );
 CREATE TABLE IF NOT EXISTS action_items (
   id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   report_id INTEGER REFERENCES reports(id) ON DELETE CASCADE,
   source_kind TEXT NOT NULL DEFAULT 'extracted',
   title TEXT NOT NULL,
@@ -82,13 +87,36 @@ CREATE TABLE IF NOT EXISTS action_feedback (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_reports_project ON reports(project_id);
+CREATE INDEX IF NOT EXISTS idx_action_items_project ON action_items(project_id);
 CREATE INDEX IF NOT EXISTS idx_action_items_report ON action_items(report_id);
 CREATE INDEX IF NOT EXISTS idx_action_tasks_item ON action_tasks(action_item_id);
 `
 
 export type BoardDb = DatabaseSync
 
+/** M5 旧库检测：文件已存在但无 projects 表 → 删文件（含 -wal/-shm）后重建（清空起步，用户决策）。 */
 export function openBoardDb(path: string): BoardDb {
+  if (existsSync(path)) {
+    const probe = new DatabaseSync(path)
+    let hasProjectsTable = false
+    try {
+      const row = probe.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'projects'").get()
+      hasProjectsTable = row !== undefined
+    } finally {
+      probe.close()
+    }
+    if (!hasProjectsTable) {
+      for (const suffix of ['', '-wal', '-shm']) {
+        try {
+          rmSync(`${path}${suffix}`, { force: true })
+        } catch {
+          // 删除失败由后续打开报错兜底
+        }
+      }
+    }
+  }
+  mkdirSync(dirname(path), { recursive: true }) // 父目录不存在时创建（如全新部署的 data/）
   const db = new DatabaseSync(path)
   db.exec('PRAGMA foreign_keys = ON')
   db.exec(SCHEMA)
@@ -101,30 +129,107 @@ export function closeBoardDb(db: BoardDb): void {
 
 const now = (): string => new Date().toISOString()
 
-// ---- reports ----
+// ---- projects ----
 
-export function upsertReport(db: BoardDb, input: { slug: string; filename: string }): ReportRecord {
+export function createProject(db: BoardDb, input: { title: string; purpose?: string }): ProjectRecord {
+  const id = randomUUID()
+  const at = now()
+  db.prepare('INSERT INTO projects (id, title, purpose, created_at, updated_at) VALUES (?, ?, ?, ?, ?)').run(
+    id,
+    input.title,
+    input.purpose ?? '',
+    at,
+    at,
+  )
+  return { id, title: input.title, purpose: input.purpose ?? '', createdAt: at, updatedAt: at }
+}
+
+export function getProject(db: BoardDb, id: string): ProjectRecord | null {
+  const row = db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as unknown as ProjectRow | undefined
+  return row ? parseProject(row) : null
+}
+
+export function listProjects(db: BoardDb): ProjectRecord[] {
+  // updated_at 倒序 = 最近活跃在前（推送缺省项目、前端列表共用口径）
+  return (db.prepare('SELECT * FROM projects ORDER BY updated_at DESC, id DESC').all() as unknown as ProjectRow[]).map(parseProject)
+}
+
+export function updateProject(db: BoardDb, id: string, patch: { title?: string; purpose?: string }): ProjectRecord | null {
+  const current = getProject(db, id)
+  if (!current) return null
+  db.prepare('UPDATE projects SET title = ?, purpose = ?, updated_at = ? WHERE id = ?').run(
+    patch.title ?? current.title,
+    patch.purpose ?? current.purpose,
+    now(),
+    id,
+  )
+  return getProject(db, id)
+}
+
+/** 硬删项目：reports/action_items/tasks/feedback 由外键级联清理；报告目录由调用方删。 */
+export function deleteProject(db: BoardDb, id: string): boolean {
+  const result = db.prepare('DELETE FROM projects WHERE id = ?').run(id)
+  return Number(result.changes) > 0
+}
+
+/** 项目列表聚合：行动项四态计数 + 项目内最新 updated_at（reports/items/projects 取最大）。 */
+export function projectActionCounts(db: BoardDb, projectId: string): { suggested: number; adopted: number; dismissed: number; manual: number } {
+  const rows = db
+    .prepare("SELECT status, source_kind FROM action_items WHERE project_id = ?")
+    .all(projectId) as Array<{ status: string; source_kind: string }>
+  return {
+    suggested: rows.filter((r) => r.status === 'suggested').length,
+    adopted: rows.filter((r) => r.status === 'adopted').length,
+    dismissed: rows.filter((r) => r.status === 'dismissed').length,
+    manual: rows.filter((r) => r.source_kind === 'manual').length,
+  }
+}
+
+export function projectLastActivity(db: BoardDb, projectId: string): string {
+  const row = db
+    .prepare(
+      `SELECT MAX(m) AS last FROM (
+         SELECT updated_at AS m FROM projects WHERE id = ?
+         UNION ALL SELECT updated_at FROM reports WHERE project_id = ?
+         UNION ALL SELECT updated_at FROM action_items WHERE project_id = ?
+       )`,
+    )
+    .get(projectId, projectId, projectId) as { last: string | null }
+  return row.last ?? ''
+}
+
+// ---- reports（项目维度）----
+
+export function upsertReport(db: BoardDb, projectId: string, input: { slug: string; filename: string }): ReportRecord {
   const existing = db
-    .prepare('SELECT * FROM reports WHERE slug = ?')
-    .get(input.slug) as unknown as ReportRow | undefined
+    .prepare('SELECT * FROM reports WHERE project_id = ? AND slug = ?')
+    .get(projectId, input.slug) as unknown as ReportRow | undefined
   if (existing) return parseReport(existing)
   const at = now()
-  db.prepare('INSERT INTO reports (slug, filename, status, imported_at, updated_at) VALUES (?, ?, ?, ?, ?)').run(
+  db.prepare('INSERT INTO reports (project_id, slug, filename, status, imported_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run(
+    projectId,
     input.slug,
     input.filename,
     'pending',
     at,
     at,
   )
-  return parseReport(db.prepare('SELECT * FROM reports WHERE slug = ?').get(input.slug) as unknown as ReportRow)
+  return parseReport(
+    db.prepare('SELECT * FROM reports WHERE project_id = ? AND slug = ?').get(projectId, input.slug) as unknown as ReportRow,
+  )
 }
 
-export function listReports(db: BoardDb): ReportRecord[] {
-  return (db.prepare('SELECT * FROM reports ORDER BY imported_at DESC, id DESC').all() as unknown as ReportRow[]).map(parseReport)
+export function listReports(db: BoardDb, projectId?: string): ReportRecord[] {
+  const rows = projectId
+    ? (db.prepare('SELECT * FROM reports WHERE project_id = ? ORDER BY imported_at DESC, id DESC').all(projectId) as unknown as ReportRow[])
+    : (db.prepare('SELECT * FROM reports ORDER BY imported_at DESC, id DESC').all() as unknown as ReportRow[])
+  return rows.map(parseReport)
 }
 
-export function getReportBySlug(db: BoardDb, slug: string): ReportRecord | null {
-  const row = db.prepare('SELECT * FROM reports WHERE slug = ?').get(slug) as unknown as ReportRow | undefined
+export function getReportBySlug(db: BoardDb, projectId: string, slug: string): ReportRecord | null {
+  const row = db
+    .prepare('SELECT * FROM reports WHERE project_id = ? AND slug = ?')
+    .get(projectId, slug) as unknown as ReportRow | undefined
   return row ? parseReport(row) : null
 }
 
@@ -139,10 +244,10 @@ export function updateReportStatus(db: BoardDb, id: number, status: ReportStatus
 
 // ---- action_items ----
 
-export function insertExtractedActionItems(db: BoardDb, reportId: number, drafts: ActionItemDraft[]): string[] {
+export function insertExtractedActionItems(db: BoardDb, projectId: string, reportId: number, drafts: ActionItemDraft[]): string[] {
   const insert = db.prepare(`
-    INSERT INTO action_items (id, report_id, source_kind, title, rationale, scene, lifecycle, expected_impact, metric_ref, priority, effort, confidence, evidence_json, evidence_level, status, created_at, updated_at)
-    VALUES (?, ?, 'extracted', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'suggested', ?, ?)
+    INSERT INTO action_items (id, project_id, report_id, source_kind, title, rationale, scene, lifecycle, expected_impact, metric_ref, priority, effort, confidence, evidence_json, evidence_level, status, created_at, updated_at)
+    VALUES (?, ?, ?, 'extracted', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'suggested', ?, ?)
   `)
   const ids: string[] = []
   const at = now()
@@ -150,6 +255,7 @@ export function insertExtractedActionItems(db: BoardDb, reportId: number, drafts
     const id = randomUUID()
     insert.run(
       id,
+      projectId,
       reportId,
       draft.title,
       draft.rationale,
@@ -171,6 +277,7 @@ export function insertExtractedActionItems(db: BoardDb, reportId: number, drafts
 }
 
 export interface CreateManualActionInput {
+  projectId: string
   sourceKind: 'extracted' | 'manual'
   reportId: number | null
   title: string
@@ -188,10 +295,11 @@ export function createActionItem(db: BoardDb, input: CreateManualActionInput): s
   const id = randomUUID()
   const at = now()
   db.prepare(`
-    INSERT INTO action_items (id, report_id, source_kind, title, rationale, scene, lifecycle, expected_impact, priority, effort, confidence, evidence_json, evidence_level, status, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'suggested', ?, ?)
+    INSERT INTO action_items (id, project_id, report_id, source_kind, title, rationale, scene, lifecycle, expected_impact, priority, effort, confidence, evidence_json, evidence_level, status, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'suggested', ?, ?)
   `).run(
     id,
+    input.projectId,
     input.reportId,
     input.sourceKind,
     input.title,
@@ -258,9 +366,9 @@ export function getActionItem(db: BoardDb, id: string): ActionItemRecord | null 
   return row ? parseActionItem(row) : null
 }
 
-export function listActionItems(db: BoardDb, filter: { reportId?: number } = {}): ActionItemRecord[] {
-  const rows = filter.reportId
-    ? (db.prepare('SELECT * FROM action_items WHERE report_id = ? ORDER BY created_at DESC, id DESC').all(filter.reportId) as unknown as ActionItemRow[])
+export function listActionItems(db: BoardDb, filter: { projectId?: string } = {}): ActionItemRecord[] {
+  const rows = filter.projectId
+    ? (db.prepare('SELECT * FROM action_items WHERE project_id = ? ORDER BY created_at DESC, id DESC').all(filter.projectId) as unknown as ActionItemRow[])
     : (db.prepare('SELECT * FROM action_items ORDER BY created_at DESC, id DESC').all() as unknown as ActionItemRow[])
   return rows.map(parseActionItem)
 }
@@ -401,8 +509,21 @@ export function listAllFeedback(db: BoardDb): ActionFeedbackRecord[] {
 
 // ---- 行映射 ----
 
+interface ProjectRow {
+  id: string
+  title: string
+  purpose: string
+  created_at: string
+  updated_at: string
+}
+
+function parseProject(row: ProjectRow): ProjectRecord {
+  return { id: row.id, title: row.title, purpose: row.purpose, createdAt: row.created_at, updatedAt: row.updated_at }
+}
+
 interface ReportRow {
   id: number
+  project_id: string
   slug: string
   filename: string
   status: string
@@ -414,6 +535,7 @@ interface ReportRow {
 function parseReport(row: ReportRow): ReportRecord {
   return {
     id: row.id,
+    projectId: row.project_id,
     slug: row.slug,
     filename: row.filename,
     status: row.status as ReportStatus,
@@ -425,6 +547,7 @@ function parseReport(row: ReportRow): ReportRecord {
 
 interface ActionItemRow {
   id: string
+  project_id: string
   report_id: number | null
   source_kind: string
   title: string
@@ -458,6 +581,7 @@ function parseActionItem(row: ActionItemRow): ActionItemRecord {
   }
   return {
     id: row.id,
+    projectId: row.project_id,
     reportId: row.report_id,
     sourceKind: row.source_kind as 'extracted' | 'manual',
     title: row.title,

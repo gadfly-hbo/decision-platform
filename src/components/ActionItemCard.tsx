@@ -19,7 +19,6 @@ interface ActionItemCardProps {
   /** 所属报告名（文件名去扩展名）；人工项为 null（chip 显示「人工补充」） */
   reportName: string | null
   expanded: boolean
-  demo: boolean
   onToggle(): void
   onAdopt(item: ActionItemView): void
   onDismiss(item: ActionItemView, reason: string): Promise<boolean> | void
@@ -34,7 +33,6 @@ export function ActionItemCard({
   item,
   reportName,
   expanded,
-  demo,
   onToggle,
   onAdopt,
   onDismiss,
@@ -74,7 +72,6 @@ export function ActionItemCard({
             ) : (
               reportName && <span className="chip val-chip">{reportName}</span>
             )}
-            {demo && <span className="demo-mark">示例</span>}
           </span>
           <span className="card-title">{item.title}</span>
           <span className="card-rationale">{item.rationale}</span>

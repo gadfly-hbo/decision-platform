@@ -53,3 +53,13 @@ verify 重跑两次 exit 0（14 文件/144 测试/build ✓），证据属实。
 1. inFlight 防误伤路径无直接测试（实现正确）。
 2. inFlight 为模块级 Set，跨 pipeline 实例共享——生产单 pipeline 无影响。
 3. PATCH /api/actions/:id/tasks 非契约路径落入 404，无害。
+
+---
+
+# M6 REVIEW（2026-10-13，全新评审者）
+
+verdict: PASS（无 blocking）。四点用户决策逐条落实（清空重建/无 JuanerAI 占位/飞书全局+【项目名】+projectId:slug 幂等/硬删弹窗逐字）；G1'-G7' 抽检过；UI 契约 v5 逐字与禁用词全过；SQL 参数化/级联/竞态收敛核过；测试有效性抽查非恒真。verify 重跑一致（15 文件/157）。
+
+Non-blocking 7 项：#1 同名 force 判定过窄（controller 裁定升格正确性修复）；#2 extracting 复位惰性化（同上）；#3 空测试；#4 陈旧标题；#5 slug 双份实现；#6 isDemo 残留字段；#7 上传无总量上限（0.0.0.0 部署后续加帽）。未验证项：真实模型冒烟未重跑（只读约束；首启清空旧库为既定行为需提示用户）。
+
+## 修复轮（review_cycles=1）：#1 force 无条件化（同名任何状态一律 force，v1/v2/v3 序列测试钉死）；#2 extracting 自愈挂 board 加载路径（scanReports 内复位+inFlight 守卫）；#3 空测试补真（假通道+0 行动项不推）；#4 标题修正。157→159 全绿。

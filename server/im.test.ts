@@ -1,12 +1,13 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { closeBoardDb, createActionItem, getActionItem, openBoardDb } from './db'
+import { closeBoardDb, createActionItem, createProject, getActionItem, openBoardDb } from './db'
 import { readImConfig, buildApprovalCards, handleApprovalCallback } from './im'
 import type { BoardView } from '../src/data/types'
 
 let dir = ''
 let db: ReturnType<typeof openBoardDb>
+let projectId = ''
 
 beforeAll(() => {
   dir = mkdtempSync(join(tmpdir(), 'dp-im-'))
@@ -15,6 +16,7 @@ afterAll(() => rmSync(dir, { recursive: true, force: true }))
 
 beforeEach(() => {
   db = openBoardDb(join(dir, `im-${Date.now()}-${Math.random().toString(36).slice(2)}.db`))
+  projectId = createProject(db, { title: '回调项目' }).id
 })
 afterEach(() => closeBoardDb(db))
 
@@ -53,6 +55,7 @@ function viewOf(items: BoardView['actionItems'], over: Partial<BoardView> = {}):
   return {
     title: '决策看板',
     lede: 'x',
+    project: { id: 'p1', title: '测试项目', purpose: '' },
     reports: [],
     actionItems: items,
     stats: { suggested: 0, adopted: 0, dismissed: 0, manual: 0 },
@@ -143,6 +146,7 @@ const payload = { itemId: 'i-1', decision: 'accept' as const, operatorName: '张
 
 function seedSuggested(title: string): string {
   return createActionItem(db, {
+    projectId,
     sourceKind: 'manual',
     reportId: null,
     title,
@@ -159,6 +163,7 @@ function seedSuggested(title: string): string {
 
 test('accept → adopted 留痕 via=card；回执含标题', () => {
   const id = createActionItem(db, {
+    projectId,
     sourceKind: 'manual',
     reportId: null,
     title: '上线会员日活动',
@@ -179,6 +184,7 @@ test('accept → adopted 留痕 via=card；回执含标题', () => {
 
 test('reject → dismissed 且理由落卡片默认值（看板可补填，G10）', () => {
   const id = createActionItem(db, {
+    projectId,
     sourceKind: 'manual',
     reportId: null,
     title: '调整渠道预算',

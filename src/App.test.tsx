@@ -1,20 +1,20 @@
 import { render, screen, within, fireEvent, waitFor } from '@testing-library/react'
 import { vi } from 'vitest'
 import App from './App'
-import type { ActionItemView, BoardView, ReportRecord } from './data'
-import { demoBoardView } from './data'
+import type { ActionItemView, BoardView, ProjectSummary, ReportRecord } from './data'
 
 /* ---- 测试夹具（注入 data 缝，不拉取后端）---- */
 
 const NOW = '2026-10-12T09:00:00.000Z'
 
 function report(id: number, over: Partial<ReportRecord> = {}): ReportRecord {
-  return { id, slug: `r${id}`, filename: `会员周报${id}.md`, status: 'done', error: null, importedAt: NOW, updatedAt: NOW, ...over }
+  return { id, projectId: 'p1', slug: `r${id}`, filename: `会员周报${id}.md`, status: 'done', error: null, importedAt: NOW, updatedAt: NOW, ...over }
 }
 
 function item(id: string, over: Partial<ActionItemView> = {}): ActionItemView {
   return {
     id,
+    projectId: 'p1',
     reportId: 1,
     sourceKind: 'extracted',
     title: `行动项 ${id}`,
@@ -101,6 +101,7 @@ const items: ActionItemView[] = [
 const baseView: BoardView = {
   title: '决策看板',
   lede: '报告驱动的行动闭环：从分析报告提取决策建议，确认后拆解任务、执行后回录反馈，证据可展开核查。',
+  project: { id: 'p1', title: '会员运营', purpose: '复购提升' },
   reports: [report(1), report(2), report(3, { status: 'pending' })],
   actionItems: items,
   stats: { suggested: 3, adopted: 1, dismissed: 1, manual: 1 },
@@ -147,7 +148,7 @@ test('三栏渲染：主区 DOM 在侧栏之前；运行详情开关 aria-expand
   vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('no backend'))))
   render(<App data={baseView} />)
   const main = screen.getByRole('main')
-  const nav = screen.getByRole('navigation', { name: '报告导航' })
+  const nav = screen.getByRole('navigation', { name: '项目导航' })
   // G13：DOM 顺序 = main → aside S-L → aside S-R（视觉列位由 grid 控制）
   expect(main.compareDocumentPosition(nav) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   const toggle = screen.getByRole('button', { name: '运行详情' })
@@ -162,49 +163,31 @@ test('三栏渲染：主区 DOM 在侧栏之前；运行详情开关 aria-expand
   vi.unstubAllGlobals()
 })
 
-test('概览头：标题/lede/统计/最新报告与通知 chip', () => {
+test('概览头：项目名/purpose 副题/项目内统计/通知 chip（v5）', () => {
   render(<App data={baseView} />)
-  expect(screen.getByRole('heading', { level: 1, name: '决策看板' })).toBeInTheDocument()
-  expect(screen.getByText(/报告驱动的行动闭环/)).toBeInTheDocument()
-  expect(screen.getByText(/最新报告 会员周报1\.md/)).toBeInTheDocument()
+  expect(screen.getByRole('heading', { level: 1, name: '会员运营' })).toBeInTheDocument()
+  expect(screen.getByText('复购提升')).toBeInTheDocument() // purpose 副题
   expect(screen.getByText(/共 3 份报告 · 建议 3 · 已采纳 1 · 已驳回 1 · 人工 1/)).toBeInTheDocument()
+  expect(screen.queryByText(/最新报告/)).not.toBeInTheDocument() // v5 移除最新报告段
   expect(screen.getByText('推送未配置')).toBeInTheDocument()
   expect(screen.queryByText('演示数据')).not.toBeInTheDocument()
-})
-
-test('S-L 报告导航：固定项 + 报告项状态点；点击联动主区报告过滤', () => {
-  render(<App data={baseView} />)
-  const nav = screen.getByRole('navigation', { name: '报告导航' })
-  expect(within(nav).getByRole('button', { name: /全部/ })).toHaveAttribute('aria-pressed', 'true')
-  expect(within(nav).getByRole('button', { name: /人工补充/ })).toBeInTheDocument()
-  expect(within(nav).getAllByText('已抽取')).toHaveLength(2)
-  expect(within(nav).getByText('待抽取')).toBeInTheDocument()
-  expect(within(nav).queryByText(/删除/)).not.toBeInTheDocument()
-
-  expect(cards()).toHaveLength(5)
-  fireEvent.click(within(nav).getByRole('button', { name: /会员周报1/ }))
-  expect(cards()).toHaveLength(2) // a1/a2 属报告 1；过滤 = 聚焦非切换页（G9）
-  fireEvent.click(within(nav).getByRole('button', { name: /人工补充/ }))
-  expect(cards()).toHaveLength(1)
-  fireEvent.click(within(nav).getByRole('button', { name: /^全部/ }))
-  expect(cards()).toHaveLength(5)
 })
 
 /* ---- S1b 报告状态条 ---- */
 
 test('S1b：待抽取报告可点「抽取」→ 抽取中提示（aria-live）', async () => {
   const { calls } = stubFetch([
-    { match: (url, m) => m === 'POST' && url.includes('/api/reports/extract'), respond: () => jsonRes({ results: [] }) },
+    { match: (url, m) => m === 'POST' && url.includes('/reports/extract'), respond: () => jsonRes({ results: [] }) },
     { match: (url, m) => m === 'GET' && url.includes('/api/dashboard'), respond: () => jsonRes(baseView) },
   ])
   render(<App data={baseView} />)
   fireEvent.click(screen.getByRole('button', { name: '抽取' }))
   const live = screen.getByText('正在抽取行动项，模型调用最长约 2 分钟，完成后自动刷新。')
   expect(live).toHaveAttribute('aria-live', 'polite')
-  // S1b 与 S-L 状态点同源（G14）：两处同步呈现「抽取中」
-  expect(screen.getAllByText('抽取中').length).toBeGreaterThanOrEqual(2)
+  // v5：报告状态仅在 S1b 呈现（左栏为项目导航）
+  expect(screen.getAllByText('抽取中')).toHaveLength(1)
   await waitFor(() => {
-    const extractCall = calls.find((c) => c.url.includes('/api/reports/extract'))
+    const extractCall = calls.find((c) => c.url.includes('/reports/extract'))
     expect(extractCall?.body).toEqual({ slug: 'r3' })
   })
   vi.unstubAllGlobals()
@@ -218,29 +201,29 @@ test('S1b：抽取失败显示原因与「重试」', async () => {
     stats: { suggested: 0, adopted: 0, dismissed: 0, manual: 0 },
   }
   stubFetch([
-    { match: (url, m) => m === 'POST' && url.includes('/api/reports/extract'), respond: () => jsonRes({ results: [] }) },
+    { match: (url, m) => m === 'POST' && url.includes('/reports/extract'), respond: () => jsonRes({ results: [] }) },
     { match: (url, m) => m === 'GET' && url.includes('/api/dashboard'), respond: () => jsonRes(failedView) },
   ])
   render(<App data={failedView} />)
-  expect(screen.getAllByText('抽取失败').length).toBeGreaterThanOrEqual(2)
+  expect(screen.getAllByText('抽取失败')).toHaveLength(1)
   expect(screen.getByText('模型调用超时（120s）')).toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: '重试' }))
-  await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith('/api/reports/extract', expect.anything()))
+  await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith(expect.stringContaining('/reports/extract'), expect.anything()))
   vi.unstubAllGlobals()
 })
 
-test('S1b：重新抽取两段式确认（G3 删除范围提示 + force:true）', async () => {
+test('S1b：重新生成两段式确认（G3 删除范围提示 + force:true）', async () => {
   const { calls } = stubFetch([
-    { match: (url, m) => m === 'POST' && url.includes('/api/reports/extract'), respond: () => jsonRes({ results: [] }) },
+    { match: (url, m) => m === 'POST' && url.includes('/reports/extract'), respond: () => jsonRes({ results: [] }) },
     { match: (url, m) => m === 'GET' && url.includes('/api/dashboard'), respond: () => jsonRes(baseView) },
   ])
   render(<App data={baseView} />)
-  const reextract = screen.getAllByRole('button', { name: '重新抽取' })[0]
+  const reextract = screen.getAllByRole('button', { name: '重新生成' })[0]
   fireEvent.click(reextract)
-  expect(screen.getByText('重新抽取将删除该报告中仍处「建议」状态的行动项；已采纳/已驳回/含任务的行动项保留')).toBeInTheDocument()
-  fireEvent.click(screen.getByRole('button', { name: '确认重新抽取' }))
+  expect(screen.getByText('重新生成将删除该报告中仍处「建议」状态的行动项；已采纳/已驳回/含任务的行动项保留')).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: '确认重新生成' }))
   await waitFor(() => {
-    const extractCall = calls.find((c) => c.url.includes('/api/reports/extract'))
+    const extractCall = calls.find((c) => c.url.includes('/reports/extract'))
     expect(extractCall?.body).toEqual({ slug: 'r1', force: true })
   })
   vi.unstubAllGlobals()
@@ -407,7 +390,8 @@ test('补填理由（S12）：卡片渠道默认理由显示补填输入；看�
 test('保存失败：role=alert 回滚服务器态', async () => {
   stubFetch([
     { match: (url, m) => m === 'PATCH' && url.includes('/api/actions/'), respond: () => jsonRes({ error: 'boom' }, false) },
-    { match: (url, m) => m === 'GET' && url.includes('/api/dashboard'), respond: () => jsonRes(baseView) },
+    { match: (url, m) => m === 'GET' && url.endsWith('/api/projects'), respond: () => jsonRes({ projects: [summaryP1] }) },
+    { match: (url, m) => m === 'GET' && url.includes('/api/projects/p1/board'), respond: () => jsonRes(baseView) },
   ])
   render(<App data={baseView} />)
   const card = cardOf('对沉睡会员发放阶梯券')
@@ -453,29 +437,13 @@ test('补充建议表单：必填校验 + POST /api/actions + 人工项入列', 
   vi.unstubAllGlobals()
 })
 
-/* ---- S7 演示态 / S8 空态 / S9 错误态 / S10 加载态 ---- */
-
-test('演示态（G7）：演示 chip + 说明条 + 3 条样例（示例角标），操作不落库', () => {
-  const fetchMock = vi.fn(() => Promise.reject(new Error('no backend')))
-  vi.stubGlobal('fetch', fetchMock)
-  render(<App data={demoBoardView} />)
-  expect(screen.getByText('演示数据')).toBeInTheDocument()
-  expect(screen.getByText('当前为演示数据：将分析报告（.md/.txt）放入 data/raw/ 后自动抽取真实行动项。')).toBeInTheDocument()
-  expect(screen.getByText('尚无报告：将 .md/.txt 放入 data/raw/ 后自动出现。')).toBeInTheDocument()
-  expect(cards()).toHaveLength(3)
-  expect(screen.getAllByText('示例')).toHaveLength(3)
-  const card = cardOf('对 90 天未复购会员发放阶梯券召回')
-  fireEvent.click(within(card).getByRole('button', { name: '采纳' }))
-  expect(within(card).getByRole('button', { name: '采纳' })).toHaveAttribute('aria-pressed', 'true') // 本地临态
-  expect(fetchMock).not.toHaveBeenCalled() // 不落库
-  vi.unstubAllGlobals()
-})
+/* ---- S8 空态 / S9 错误态 / S10 加载态 ---- */
 
 test('报告空态：有报告且已抽取、0 行动项（区别于过滤空态）', () => {
   const emptyView: BoardView = { ...baseView, reports: [report(1)], actionItems: [], stats: { suggested: 0, adopted: 0, dismissed: 0, manual: 0 } }
   render(<App data={emptyView} />)
   expect(screen.getByText('该报告未抽取到行动项')).toBeInTheDocument()
-  expect(screen.getByText('报告已解析完成，但未包含可执行建议；可尝试重新抽取或检查报告内容。')).toBeInTheDocument()
+  expect(screen.getByText('报告已解析完成，但未包含可执行建议；可尝试重新生成或检查报告内容。')).toBeInTheDocument()
   expect(screen.queryByRole('article')).not.toBeInTheDocument()
 })
 
@@ -494,14 +462,6 @@ test('加载态（S10）：首屏骨架 + aria-busy，不显示空态', () => {
   expect(main).toHaveAttribute('aria-busy', 'true')
   expect(document.querySelectorAll('.skeleton-card')).toHaveLength(3)
   expect(screen.queryByText('该报告未抽取到行动项')).not.toBeInTheDocument()
-  vi.unstubAllGlobals()
-})
-
-test('无后端时回退演示数据（isDemo）', async () => {
-  vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('backend down'))))
-  render(<App />)
-  expect(await screen.findByText('演示数据')).toBeInTheDocument()
-  expect(screen.getByText('对 90 天未复购会员发放阶梯券召回')).toBeInTheDocument()
   vi.unstubAllGlobals()
 })
 
@@ -668,29 +628,6 @@ test('任务区仅已采纳项显示：suggested/dismissed 展开均无「任务
   expect(within(cardOf('调整渠道预算')).queryByRole('region', { name: '任务' })).not.toBeInTheDocument()
 })
 
-test('演示态任务与反馈仅本地临态、不落库（G7）', async () => {
-  const fetchMock = vi.fn(() => Promise.reject(new Error('no backend')))
-  vi.stubGlobal('fetch', fetchMock)
-  render(<App data={demoBoardView} />)
-  const card = cardOf('对 90 天未复购会员发放阶梯券召回')
-  fireEvent.click(within(card).getByRole('button', { name: '采纳' }))
-  fireEvent.click(within(card).getByRole('button', { name: /对 90 天未复购会员发放阶梯券召回/ }))
-  const taskRegion = within(card).getByRole('region', { name: '任务' })
-  fireEvent.click(within(taskRegion).getByRole('button', { name: '添加任务' }))
-  const taskForm = within(taskRegion).getByRole('form', { name: '新增任务' })
-  fireEvent.change(within(taskForm).getByLabelText('标题 *'), { target: { value: '演示任务' } })
-  fireEvent.click(within(taskForm).getByRole('button', { name: '添加任务' }))
-  await waitFor(() => expect(within(taskRegion).getByText('演示任务')).toBeInTheDocument())
-
-  const feedbackForm = within(taskRegion).getByRole('form', { name: '反馈' })
-  fireEvent.change(within(feedbackForm).getByLabelText('结果 *'), { target: { value: '演示结果' } })
-  fireEvent.click(within(feedbackForm).getByRole('radio', { name: '5' }))
-  fireEvent.click(within(feedbackForm).getByRole('button', { name: '提交反馈' }))
-  await waitFor(() => expect(within(taskRegion).getByText('已执行 · 评分 5/5')).toBeInTheDocument())
-  expect(fetchMock).not.toHaveBeenCalled() // 全程不落库
-  vi.unstubAllGlobals()
-})
-
 /* ---- S1 通知 chip 四态（T6，契约 2.1）---- */
 
 test('通知 chip 四态：未配置 / IM 已配置未推送 / 已推送 · slug / 未配置飞书 · 文本摘要推送', () => {
@@ -704,8 +641,9 @@ test('通知 chip 四态：未配置 / IM 已配置未推送 / 已推送 · slug
   unmount()
 
   render(<App data={{ ...baseView, notify: { configured: true, imConfigured: true, lastPushedReport: '会员周报-2026-10-10' } }} />)
-  const pushed = screen.getByText('已推送 · 会员周报-2026-10-10')
+  const pushed = screen.getByText('已推送 · 会员运营/会员周报-2026-10-10')
   expect(pushed).toHaveClass('notify-chip')
+  expect(pushed.textContent).toBe('已推送 · 会员运营/会员周报-2026-10-10') // G5' 短形态
   expect(pushed).not.toHaveClass('warn') // 已推送为 ok 色
   unmount()
 
@@ -811,5 +749,232 @@ test('S-R 抽屉：关闭后焦点回开关钮；再点开关可重新打开', a
   expect(toggle).toHaveFocus() // 非模态抽屉：关闭后焦点回开关钮
   fireEvent.click(toggle)
   expect(screen.getByRole('complementary', { name: '运行详情' })).toBeInTheDocument()
+  vi.unstubAllGlobals()
+})
+
+/* ---- M6：项目导航 / 上传 / 无项目空态 / localStorage（T3）---- */
+
+function summaryOfProject(over: Partial<ProjectSummary> & { id: string; title: string }): ProjectSummary {
+  return {
+    purpose: '',
+    createdAt: NOW,
+    updatedAt: NOW,
+    actionCounts: { suggested: 0, adopted: 0, dismissed: 0, manual: 0 },
+    lastActivity: '',
+    ...over,
+  }
+}
+
+const summaryP1 = summaryOfProject({ id: 'p1', title: '会员运营', actionCounts: { suggested: 3, adopted: 1, dismissed: 0, manual: 1 } })
+const summaryP2 = summaryOfProject({ id: 'p2', title: '门店扩张', actionCounts: { suggested: 2, adopted: 0, dismissed: 1, manual: 0 }, lastActivity: NOW })
+
+const boardP2: BoardView = {
+  ...baseView,
+  project: { id: 'p2', title: '门店扩张', purpose: '新店筹备' },
+  reports: [report(5, { projectId: 'p2' })],
+  actionItems: [item('b1', { projectId: 'p2', reportId: 5, title: '门店B-选址复核' })],
+  stats: { suggested: 1, adopted: 0, dismissed: 0, manual: 0 },
+}
+
+test('项目切换：点左栏项目项 → 主区整体换数据源（S1/S1b/S6/S2），aria-pressed 高亮', async () => {
+  stubFetch([
+    { match: (url) => url.includes('/api/projects/p2/board'), respond: () => jsonRes(boardP2) },
+  ])
+  render(<App projects={[summaryP1, summaryP2]} data={baseView} />)
+  expect(screen.getByRole('heading', { level: 1, name: '会员运营' })).toBeInTheDocument()
+  const nav = screen.getByRole('navigation', { name: '项目导航' })
+  expect(within(nav).getByRole('button', { name: /^会员运营/ })).toHaveAttribute('aria-pressed', 'true')
+
+  fireEvent.click(within(nav).getByRole('button', { name: /^门店扩张/ }))
+  expect(await screen.findByRole('heading', { level: 1, name: '门店扩张' })).toBeInTheDocument()
+  expect(screen.getByText('新店筹备')).toBeInTheDocument() // purpose 副题切换
+  expect(screen.getByText('门店B-选址复核')).toBeInTheDocument()
+  expect(within(nav).getByRole('button', { name: /^门店扩张/ })).toHaveAttribute('aria-pressed', 'true')
+  expect(screen.queryByText('对沉睡会员发放阶梯券')).not.toBeInTheDocument() // A 项目数据不残留
+  vi.unstubAllGlobals()
+})
+
+test('S-L 新建项目：inline 表单必填校验（请填写名称）→ 创建成功切换为新项目', async () => {
+  const created = summaryOfProject({ id: 'p-new', title: '新项目' })
+  const boardNew: BoardView = { ...baseView, project: { id: 'p-new', title: '新项目', purpose: '' }, reports: [], actionItems: [], stats: { suggested: 0, adopted: 0, dismissed: 0, manual: 0 } }
+  const { calls } = stubFetch([
+    { match: (url, m) => m === 'POST' && url.endsWith('/api/projects'), respond: () => jsonRes(created) },
+    { match: (url, m) => m === 'GET' && url.endsWith('/api/projects'), respond: () => jsonRes({ projects: [summaryP1, created] }) },
+    { match: (url) => url.includes('/api/projects/p-new/board'), respond: () => jsonRes(boardNew) },
+  ])
+  render(<App projects={[summaryP1]} data={baseView} />)
+  fireEvent.click(screen.getByRole('button', { name: '＋ 新建项目' }))
+  fireEvent.click(screen.getByRole('button', { name: '创建' }))
+  expect(screen.getByText('请填写名称')).toBeInTheDocument() // 逐字校验文案
+
+  fireEvent.change(screen.getByLabelText('名称'), { target: { value: '新项目' } })
+  fireEvent.change(screen.getByLabelText('目的'), { target: { value: '跟踪试点' } })
+  fireEvent.click(screen.getByRole('button', { name: '创建' }))
+  await waitFor(() => {
+    const post = calls.find((c) => c.method === 'POST' && c.url.endsWith('/api/projects'))
+    expect(post?.body).toEqual({ title: '新项目', purpose: '跟踪试点' })
+  })
+  expect(await screen.findByRole('heading', { level: 1, name: '新项目' })).toBeInTheDocument() // 切换为新项目
+  expect(screen.queryByLabelText('新建项目')).not.toBeInTheDocument() // 表单收起
+  vi.unstubAllGlobals()
+})
+
+test('S-L 编辑项目：当前项编辑入口预填名称/purpose → 保存走 PATCH', async () => {
+  const renamed = { ...summaryP1, title: '会员运营V2' }
+  const boardRenamed: BoardView = { ...baseView, project: { ...baseView.project, title: '会员运营V2' } }
+  const { calls } = stubFetch([
+    { match: (url, m) => m === 'PATCH' && url.includes('/api/projects/p1'), respond: () => jsonRes(renamed) },
+    { match: (url, m) => m === 'GET' && url.endsWith('/api/projects'), respond: () => jsonRes({ projects: [renamed] }) },
+    { match: (url) => url.includes('/api/projects/p1/board'), respond: () => jsonRes(boardRenamed) },
+  ])
+  render(<App projects={[summaryP1]} data={baseView} />)
+  fireEvent.click(screen.getByRole('button', { name: '编辑 会员运营' }))
+  const form = screen.getByLabelText('编辑项目')
+  expect((within(form).getByLabelText('名称') as HTMLInputElement).value).toBe('会员运营')
+  fireEvent.change(within(form).getByLabelText('名称'), { target: { value: '会员运营V2' } })
+  fireEvent.click(within(form).getByRole('button', { name: '保存' }))
+  await waitFor(() => {
+    const patch = calls.find((c) => c.method === 'PATCH')
+    expect(patch?.body).toEqual({ title: '会员运营V2' })
+  })
+  vi.unstubAllGlobals()
+})
+
+test('S14 删除项目弹窗：逐字正文+项目名、打开聚焦取消、取消/Esc 回 ×、确认走 DELETE 并回退当前项目', async () => {
+  const { calls } = stubFetch([
+    { match: (url, m) => m === 'DELETE' && url.includes('/api/projects/p2'), respond: () => jsonRes({ deleted: true }) },
+    { match: (url, m) => m === 'GET' && url.endsWith('/api/projects'), respond: () => jsonRes({ projects: [summaryP1] }) },
+    { match: (url) => url.includes('/api/projects/p1/board'), respond: () => jsonRes(baseView) },
+  ])
+  render(<App projects={[summaryP2, summaryP1]} data={boardP2} />)
+  expect(screen.getByRole('heading', { level: 1, name: '门店扩张' })).toBeInTheDocument()
+
+  const delBtn = screen.getByRole('button', { name: '删除 门店扩张' })
+  fireEvent.click(delBtn)
+  const dialog = screen.getByRole('dialog')
+  expect(dialog).toHaveAttribute('open', '')
+  expect(screen.getByText('删除项目')).toBeInTheDocument()
+  expect(within(dialog).getByText('门店扩张')).toBeInTheDocument()
+  expect(screen.getByText('项目及其报告文件将一并删除，不可恢复。')).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: '取消' })).toHaveFocus() // 破坏性操作安全位
+
+  // Esc 取消：无变更
+  fireEvent(dialog, new Event('cancel', { cancelable: true }))
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  expect(delBtn).toHaveFocus()
+  expect(calls.filter((c) => c.method === 'DELETE')).toHaveLength(0)
+
+  // 确认删除 → 硬删 + G7' 回退列表首个项目
+  fireEvent.click(delBtn)
+  fireEvent.click(screen.getByRole('button', { name: '确认删除' }))
+  await waitFor(() => expect(calls.find((c) => c.method === 'DELETE')).toBeTruthy())
+  expect(await screen.findByRole('heading', { level: 1, name: '会员运营' })).toBeInTheDocument() // 回退 p1
+  vi.unstubAllGlobals()
+})
+
+test('上传报告：多文件前端预检（类型/大小逐字失败文案）+ 合法文件 POST 逐份上传', async () => {
+  const uploadedBoard: BoardView = {
+    ...baseView,
+    reports: [...baseView.reports, report(9, { filename: '新报告.md', status: 'extracting' })],
+  }
+  const { calls } = stubFetch([
+    {
+      match: (url, m) => m === 'POST' && url.includes('/api/projects/p1/reports'),
+      respond: () => jsonRes({ results: [{ filename: '新报告.md', slug: '新报告', ok: true, status: 'accepted' }] }),
+    },
+    { match: (url) => url.includes('/api/projects/p1/board'), respond: () => jsonRes(uploadedBoard) },
+    { match: (url, m) => m === 'GET' && url.endsWith('/api/projects'), respond: () => jsonRes({ projects: [summaryP1] }) },
+  ])
+  const { container } = render(<App projects={[summaryP1]} data={baseView} />)
+  const input = container.querySelector('input.upload-input') as HTMLInputElement
+  const goodFile = new File(['# 报告内容'], '新报告.md', { type: 'text/markdown' })
+  const badType = new File(['a,b'], '数据.csv', { type: 'text/csv' })
+  const tooBig = new File(['x'.repeat(2 * 1024 * 1024 + 1)], '超大.md')
+  Object.defineProperty(input, 'files', { value: [goodFile, badType, tooBig] })
+  fireEvent.change(input)
+
+  await waitFor(() => {
+    const post = calls.find((c) => c.method === 'POST' && c.url.includes('/api/projects/p1/reports'))
+    expect(post).toBeTruthy()
+  })
+  const post = calls.find((c) => c.method === 'POST' && c.url.includes('/api/projects/p1/reports'))!
+  expect((post.body as { files: Array<{ filename: string }> }).files.map((f) => f.filename)).toEqual(['新报告.md']) // 预检失败不发送
+  expect(await screen.findByText('上传失败：仅支持 .md/.txt 文件')).toBeInTheDocument() // 契约逐字
+  expect(screen.getByText('上传失败：文件超过 2MB')).toBeInTheDocument()
+  await waitFor(() => expect(screen.getByText('抽取中')).toBeInTheDocument()) // 上传成功 → board 刷新见抽取中
+  vi.unstubAllGlobals()
+})
+
+test('无项目空态：引导卡（尚无项目/一句话/新建表单）+ S-L 空态逐字 + 运行详情开关保留', async () => {
+  const created = summaryOfProject({ id: 'p-first', title: '第一个项目' })
+  const boardFirst: BoardView = { ...baseView, project: { id: 'p-first', title: '第一个项目', purpose: '' }, reports: [], actionItems: [], stats: { suggested: 0, adopted: 0, dismissed: 0, manual: 0 } }
+  stubFetch([
+    { match: (url, m) => m === 'POST' && url.endsWith('/api/projects'), respond: () => jsonRes(created) },
+    { match: (url, m) => m === 'GET' && url.endsWith('/api/projects'), respond: () => jsonRes({ projects: [created] }) },
+    { match: (url) => url.includes('/api/projects/p-first/board'), respond: () => jsonRes(boardFirst) },
+  ])
+  render(<App projects={[]} />)
+  expect(screen.getByText('尚无项目——新建一个开始。')).toBeInTheDocument() // S-L 空态逐字
+  expect(screen.getByRole('heading', { level: 2, name: '尚无项目' })).toBeInTheDocument()
+  expect(screen.getByText('新建一个项目，在项目内上传报告即可生成看板。')).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: '运行详情' })).toBeInTheDocument() // G4'：开关保留在引导卡头部
+
+  const guide = document.querySelector('.project-guide') as HTMLElement
+  fireEvent.click(within(guide).getByRole('button', { name: '＋ 新建项目' })) // 引导卡入口（S-L 顶栏入口并存）
+  fireEvent.change(within(guide).getByLabelText('名称'), { target: { value: '第一个项目' } })
+  fireEvent.click(screen.getByRole('button', { name: '创建' }))
+  expect(await screen.findByRole('heading', { level: 1, name: '第一个项目' })).toBeInTheDocument()
+  vi.unstubAllGlobals()
+})
+
+test('演示形态禁现（v5 负面用例 2）：有项目与无项目态均不出现演示文案', () => {
+  const { unmount } = render(<App projects={[]} />)
+  for (const banned of ['演示数据', '示例报告', '放入 data/raw/']) {
+    expect(screen.queryByText(new RegExp(banned))).not.toBeInTheDocument()
+  }
+  unmount()
+  render(<App data={baseView} />)
+  for (const banned of ['演示数据', '示例报告', '放入 data/raw/']) {
+    expect(screen.queryByText(new RegExp(banned))).not.toBeInTheDocument()
+  }
+})
+
+test('localStorage 记忆（G7 决议）：刷新回到最后项目；切换写入', async () => {
+  window.localStorage.setItem('dp.activeProjectId', 'p2')
+  stubFetch([
+    { match: (url, m) => m === 'GET' && url.endsWith('/api/projects'), respond: () => jsonRes({ projects: [summaryP1, summaryP2] }) },
+    { match: (url) => url.includes('/api/projects/p2/board'), respond: () => jsonRes(boardP2) },
+    { match: (url) => url.includes('/api/projects/p1/board'), respond: () => jsonRes(baseView) },
+  ])
+  render(<App />)
+  expect(await screen.findByRole('heading', { level: 1, name: '门店扩张' })).toBeInTheDocument() // 回到最后项目
+
+  fireEvent.click(screen.getByRole('button', { name: /^会员运营/ }))
+  await screen.findByRole('heading', { level: 1, name: '会员运营' })
+  expect(window.localStorage.getItem('dp.activeProjectId')).toBe('p1') // 切换写入
+  window.localStorage.removeItem('dp.activeProjectId')
+  vi.unstubAllGlobals()
+})
+
+test('fetch 失败 → 明确错误态（不回退演示）：项目列表加载失败 + 重试', async () => {
+  let fail = true
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/api/projects') && !fail) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ projects: [summaryP1] }) })
+      }
+      if (url.includes('/api/projects/p1/board')) return Promise.resolve({ ok: true, json: () => Promise.resolve(baseView) })
+      return Promise.reject(new Error('backend down'))
+    }),
+  )
+  render(<App />)
+  expect(await screen.findByText('项目列表加载失败')).toBeInTheDocument()
+  expect(screen.queryByText('演示数据')).not.toBeInTheDocument()
+
+  fail = false
+  fireEvent.click(screen.getByRole('button', { name: '重试' }))
+  expect(await screen.findByRole('heading', { level: 1, name: '会员运营' })).toBeInTheDocument()
   vi.unstubAllGlobals()
 })

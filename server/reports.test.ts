@@ -2,18 +2,16 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { Server } from 'node:http'
-import { startServer } from './index'
-import { createReportPipeline } from './reports'
-import { applyActionPatch } from './board'
-import { createActionItem, listReports, updateReportStatus } from './db'
+import { closeBoardDb, createActionItem, createProject, listReports, openBoardDb, updateReportStatus, type BoardDb } from './db'
+import { extractReports, loadCalibrationContext, scanReports } from './reports'
+import { applyActionPatch, CARD_DISMISS_DEFAULT_REASON } from './board'
 import type { ExtractionInput, ExtractionRunner } from './agent/extract'
 import type { ActionItemDraft } from './agent/types'
 
 let dir: string
-let dataDir: string
-let server: Server
-let port: number
+let db: BoardDb
+let projectId: string
+let reportsDir: string
 
 const DRAFT: ActionItemDraft = {
   title: '提高复购频次',
@@ -25,13 +23,13 @@ const DRAFT: ActionItemDraft = {
   evidence: { facts: [{ text: '复购率下滑', quote: '复购率由 12% 降至 9%' }], level: '数据支撑', reasoning: '报告数据支持' },
 }
 
-function fakeRunner(result: ActionItemDraft[] = [DRAFT]): ExtractionRunner & { calls: string[] } {
-  const calls: string[] = []
+function runnerOf(result: () => ActionItemDraft[]): ExtractionRunner & { inputs: ExtractionInput[] } {
+  const inputs: ExtractionInput[] = []
   return {
-    calls,
+    inputs,
     async runExtraction(input) {
-      calls.push(input.taskId)
-      return result
+      inputs.push(input)
+      return result()
     },
     async runExtractionRaw() {
       throw new Error('not used')
@@ -39,72 +37,49 @@ function fakeRunner(result: ActionItemDraft[] = [DRAFT]): ExtractionRunner & { c
   }
 }
 
-async function listen(runner: ExtractionRunner): Promise<void> {
-  port = 8600 + Math.floor(Math.random() * 400)
-  server = startServer(port, '127.0.0.1', {
-    dataDir,
-    dbPath: join(dir, 'board.db'),
-    agentRunner: runner,
-    notifyFile: join(dir, 'notify.json'),
-    notifyStateFile: join(dir, 'notify-state.json'),
-    pushScanIntervalMs: 60_000_000,
-    pushScanFirstDelayMs: 60_000_000,
-  })
-  await new Promise((resolve) => server.on('listening', resolve))
-}
-
-async function api(path: string, init?: RequestInit): Promise<Response> {
-  return fetch(`http://127.0.0.1:${port}${path}`, init)
-}
-
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'dp-pipe-'))
-  dataDir = join(dir, 'raw')
-  mkdirSync(dataDir)
+  db = openBoardDb(join(dir, 'board.db'))
+  projectId = createProject(db, { title: '管线项目' }).id
+  reportsDir = join(dir, 'projects', projectId, 'reports')
+  mkdirSync(reportsDir, { recursive: true })
 })
 
-afterEach(async () => {
-  await new Promise<void>((resolve) => {
-    server.closeAllConnections?.()
-    server.close(() => resolve())
-  })
+afterEach(() => {
+  closeBoardDb(db)
   rmSync(dir, { recursive: true, force: true })
 })
 
-describe('报告扫描与抽取管线（SQLite + 假 runner）', () => {
-  it('新 md/txt 报告注册为 pending；已注册 slug 不重复', async () => {
-    writeFileSync(join(dataDir, '周报.md'), '# 报告一')
-    await listen(fakeRunner())
-    const reports1 = await (await api('/api/reports')).json()
-    expect(reports1.reports).toHaveLength(1)
-    expect(reports1.reports[0]).toMatchObject({ slug: '周报', filename: '周报.md', status: 'pending' })
+describe('项目报告扫描与抽取管线（SQLite + 假 runner）', () => {
+  it('新 md/txt 报告注册为 pending；已注册 slug 不重复；旧 CSV 不识别', () => {
+    writeFileSync(join(reportsDir, '周报.md'), '# 报告一')
+    writeFileSync(join(reportsDir, '会员周报4213.csv'), 'a,b\n1,2')
+    const reports1 = scanReports(db, projectId, reportsDir)
+    expect(reports1).toHaveLength(1)
+    expect(reports1[0]).toMatchObject({ projectId, slug: '周报', filename: '周报.md', status: 'pending' })
 
-    const reports2 = await (await api('/api/reports')).json()
-    expect(reports2.reports).toHaveLength(1)
-    expect(reports2.reports[0].id).toBe(reports1.reports[0].id)
+    const reports2 = scanReports(db, projectId, reportsDir)
+    expect(reports2).toHaveLength(1)
+    expect(reports2[0].id).toBe(reports1[0].id)
   })
 
   it('extract 处理 pending 报告：done + 行动项入库；再次 extract 不重复处理', async () => {
-    writeFileSync(join(dataDir, 'r1.md'), '报告内容')
-    const runner = fakeRunner()
-    await listen(runner)
+    writeFileSync(join(reportsDir, 'r1.md'), '报告内容')
+    const runner = runnerOf(() => [DRAFT])
+    scanReports(db, projectId, reportsDir)
 
-    const extract1 = await api('/api/reports/extract', { method: 'POST', body: '{}' })
-    expect(extract1.status).toBe(200)
-    const body1 = await extract1.json()
-    expect(body1.results).toHaveLength(1)
-    expect(body1.results[0]).toMatchObject({ slug: 'r1', status: 'done', inserted: 1 })
+    const results1 = await extractReports(db, projectId, reportsDir, runner)
+    expect(results1).toHaveLength(1)
+    expect(results1[0]).toMatchObject({ slug: 'r1', status: 'done', inserted: 1 })
+    expect(runner.inputs.map((input) => input.taskId)).toEqual([`extract:${projectId}:r1`])
 
-    expect(runner.calls).toEqual(['extract:r1'])
-
-    const extract2 = await api('/api/reports/extract', { method: 'POST', body: '{}' })
-    const body2 = await extract2.json()
-    expect(body2.results).toHaveLength(0) // 无待处理报告
-    expect(runner.calls).toHaveLength(1)
+    const results2 = await extractReports(db, projectId, reportsDir, runner)
+    expect(results2).toHaveLength(0) // 无待处理报告
+    expect(runner.inputs).toHaveLength(1)
   })
 
   it('runner 抛错 → failed + error 信息；可重试成功', async () => {
-    writeFileSync(join(dataDir, 'r1.md'), '报告内容')
+    writeFileSync(join(reportsDir, 'r1.md'), '报告内容')
     let fail = true
     const runner: ExtractionRunner = {
       async runExtraction() {
@@ -115,123 +90,86 @@ describe('报告扫描与抽取管线（SQLite + 假 runner）', () => {
         throw new Error('not used')
       },
     }
-    await listen(runner)
+    scanReports(db, projectId, reportsDir)
 
-    const extract1 = await api('/api/reports/extract', { method: 'POST', body: '{}' })
-    const body1 = await extract1.json()
-    expect(body1.results[0]).toMatchObject({ slug: 'r1', status: 'failed', error: '模型超时' })
-
-    const reports = await (await api('/api/reports')).json()
-    expect(reports.reports[0]).toMatchObject({ status: 'failed', error: '模型超时' })
+    const results1 = await extractReports(db, projectId, reportsDir, runner)
+    expect(results1[0]).toMatchObject({ slug: 'r1', status: 'failed', error: '模型超时' })
+    expect(listReports(db, projectId)[0]).toMatchObject({ status: 'failed', error: '模型超时' })
 
     fail = false
-    const extract2 = await api('/api/reports/extract', { method: 'POST', body: '{}' })
-    const body2 = await extract2.json()
-    expect(body2.results[0]).toMatchObject({ slug: 'r1', status: 'done' })
+    const results2 = await extractReports(db, projectId, reportsDir, runner)
+    expect(results2[0]).toMatchObject({ slug: 'r1', status: 'done' })
   })
 
   it('force 重抽（G3）：纯 suggested 删除重建；adopted/dismissed/含任务项存活', async () => {
-    writeFileSync(join(dataDir, 'r1.md'), '报告内容')
     const draftOf = (title: string): ActionItemDraft => ({ ...DRAFT, title })
+    writeFileSync(join(reportsDir, 'r1.md'), '报告内容')
     let current: ActionItemDraft[] = [draftOf('A-已采纳'), draftOf('B-已驳回'), draftOf('C-含任务'), draftOf('D-纯建议')]
-    const runner: ExtractionRunner = {
-      async runExtraction() {
-        return current
-      },
-      async runExtractionRaw() {
-        throw new Error('not used')
-      },
-    }
-    await listen(runner)
-    await api('/api/reports/extract', { method: 'POST', body: '{}' })
+    const runner = runnerOf(() => current)
+    await extractReports(db, projectId, reportsDir, runner)
 
-    const board1 = (await (await api('/api/dashboard')).json()) as {
-      actionItems: Array<{ id: string; title: string }>
-    }
-    const idOf = (title: string) => board1.actionItems.find((it) => it.title === title)?.id
+    const loadItems = () =>
+      db.prepare('SELECT id, title FROM action_items WHERE project_id = ?').all(projectId) as Array<{ id: string; title: string }>
+    const items = loadItems()
+    const idOf = (title: string) => items.find((it) => it.title === title)?.id
     const idA = idOf('A-已采纳')
     const idB = idOf('B-已驳回')
     const idC = idOf('C-含任务')
     const idD = idOf('D-纯建议')
     expect([idA, idB, idC, idD].every(Boolean)).toBe(true)
 
-    // 经 API 造数：A 采纳；B 驳回（带理由）；C 保持 suggested 但挂任务
-    await api(`/api/actions/${idA}`, { method: 'PATCH', body: JSON.stringify({ status: 'adopted', via: 'board' }) })
-    await api(`/api/actions/${idB}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ status: 'dismissed', dismissedReason: '与大盘趋势不符', via: 'board' }),
-    })
-    const task = await api(`/api/actions/${idC}/tasks`, {
-      method: 'POST',
-      body: JSON.stringify({ title: '联系渠道负责人', owner: '店长' }),
-    })
-    expect(task.status).toBe(200)
+    // 造数：A 采纳；B 驳回（带理由）；C 保持 suggested 但挂任务
+    applyActionPatch(db, idA as string, { status: 'adopted', via: 'board' })
+    applyActionPatch(db, idB as string, { status: 'dismissed', dismissedReason: '与大盘趋势不符', via: 'board' })
+    db.prepare(
+      'INSERT INTO action_tasks (id, action_item_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+    ).run('t-c', idC as string, '联系渠道负责人', 't', 't')
 
     // force 重抽：只返回一条新建议 → 纯 suggested（D）删除重建，其余存活
     current = [draftOf('E-新建议')]
-    const force = await api('/api/reports/extract', {
-      method: 'POST',
-      body: JSON.stringify({ slug: 'r1', force: true }),
-    })
-    const forceBody = await force.json()
-    expect(forceBody.results[0]).toMatchObject({ slug: 'r1', status: 'done', inserted: 1, removedStale: 1 })
+    const force = await extractReports(db, projectId, reportsDir, runner, { slug: 'r1', force: true })
+    expect(force[0]).toMatchObject({ slug: 'r1', status: 'done', inserted: 1, removedStale: 1 })
 
-    const board2 = (await (await api('/api/dashboard')).json()) as {
-      actionItems: Array<{ id: string; title: string; tasks: unknown[] }>
-    }
-    const ids = new Set(board2.actionItems.map((it) => it.id))
-    expect(ids.has(idA as string)).toBe(true) // adopted 存活
-    expect(ids.has(idB as string)).toBe(true) // dismissed 存活
-    expect(ids.has(idC as string)).toBe(true) // 含任务的 suggested 存活
-    expect(ids.has(idD as string)).toBe(false) // 纯 suggested 被删除
-    expect(board2.actionItems).toHaveLength(4) // A/B/C + 新 E
-    const itemC = board2.actionItems.find((it) => it.id === idC)
-    expect(itemC?.tasks).toHaveLength(1) // 存活项的任务未受影响
+    const after = loadItems()
+    const ids = new Set(after.map((it) => it.id))
+    expect(ids.has(idA as string)).toBe(true)
+    expect(ids.has(idB as string)).toBe(true)
+    expect(ids.has(idC as string)).toBe(true)
+    expect(ids.has(idD as string)).toBe(false)
+    expect(after).toHaveLength(4) // A/B/C + 新 E
+    const taskLeft = db.prepare('SELECT COUNT(*) AS c FROM action_tasks').get() as { c: number }
+    expect(taskLeft.c).toBe(1) // 存活项的任务未受影响
   })
 
-  it('指定 slug 抽取单份报告；未知 slug 404', async () => {
-    writeFileSync(join(dataDir, 'r1.md'), 'A')
-    writeFileSync(join(dataDir, 'r2.txt'), 'B')
-    await listen(fakeRunner())
+  it('指定 slug 抽取单份报告；未知 slug 空结果', async () => {
+    writeFileSync(join(reportsDir, 'r1.md'), 'A')
+    writeFileSync(join(reportsDir, 'r2.txt'), 'B')
+    scanReports(db, projectId, reportsDir)
+    const runner = runnerOf(() => [])
 
-    const only2 = await api('/api/reports/extract', { method: 'POST', body: JSON.stringify({ slug: 'r2' }) })
-    const body = await only2.json()
-    expect(body.results).toHaveLength(1)
-    expect(body.results[0].slug).toBe('r2')
+    const only2 = await extractReports(db, projectId, reportsDir, runner, { slug: 'r2' })
+    expect(only2).toHaveLength(1)
+    expect(only2[0].slug).toBe('r2')
 
-    const missing = await api('/api/reports/extract', { method: 'POST', body: JSON.stringify({ slug: 'nope' }) })
-    expect(missing.status).toBe(404)
+    const missing = await extractReports(db, projectId, reportsDir, runner, { slug: 'nope' })
+    expect(missing).toHaveLength(0)
   })
 
-  it('旧 CSV 文件不被识别为报告', async () => {
-    writeFileSync(join(dataDir, '会员周报4213-2026-09-26.csv'), 'a,b\n1,2')
-    await listen(fakeRunner())
-    const reports = await (await api('/api/reports')).json()
-    expect(reports.reports).toHaveLength(0)
-  })
-
-  it('无 runner（模型不可用）→ 503 明确错误', async () => {
-    writeFileSync(join(dataDir, 'r1.md'), 'A')
-    port = 8600 + Math.floor(Math.random() * 400)
-    server = startServer(port, '127.0.0.1', {
-      dataDir,
-      dbPath: join(dir, 'board.db'),
-      notifyFile: join(dir, 'notify.json'),
-      notifyStateFile: join(dir, 'notify-state.json'),
-      pushScanIntervalMs: 60_000_000,
-      pushScanFirstDelayMs: 60_000_000,
-    })
-    await new Promise((resolve) => server.on('listening', resolve))
-    const res = await api('/api/reports/extract', { method: 'POST', body: '{}' })
-    expect(res.status).toBe(503)
-    const body = await res.json()
-    expect(body.error).toContain('模型')
+  it('扫描隔离：B 项目目录的报告不出现在 A 项目列表', () => {
+    const projectB = createProject(db, { title: '项目B' }).id
+    const dirB = join(dir, 'projects', projectB, 'reports')
+    mkdirSync(dirB, { recursive: true })
+    writeFileSync(join(reportsDir, 'a-报告.md'), 'A')
+    writeFileSync(join(dirB, 'b-报告.md'), 'B')
+    expect(scanReports(db, projectId, reportsDir).map((r) => r.slug)).toEqual(['a-报告'])
+    expect(scanReports(db, projectB, dirB).map((r) => r.slug)).toEqual(['b-报告'])
   })
 })
 
-describe('G12 校准注入（抽取 prompt 注入驳回理由与人工补充方向）', () => {
-  function seedItem(db: ReturnType<typeof createReportPipeline>['db'], title: string, priority = 'medium'): string {
+describe('G12 校准注入（项目级：驳回理由与人工补充方向）', () => {
+  function seedItem(title: string): string {
     return createActionItem(db, {
+      projectId,
       sourceKind: 'manual',
       reportId: null,
       title,
@@ -239,101 +177,99 @@ describe('G12 校准注入（抽取 prompt 注入驳回理由与人工补充方�
       scene: null,
       lifecycle: null,
       expectedImpact: '待评估',
-      priority,
+      priority: 'medium',
       effort: 'medium',
       confidence: null,
       evidence: { facts: [], level: '经验假设', reasoning: `${title}的依据` },
     })
   }
 
-  async function capturingRunner(drafts: ActionItemDraft[] = []): Promise<{ runner: ExtractionRunner; inputs: ExtractionInput[] }> {
-    const inputs: ExtractionInput[] = []
-    return {
-      inputs,
-      runner: {
-        async runExtraction(input) {
-          inputs.push(input)
-          return drafts
-        },
-        async runExtractionRaw() {
-          throw new Error('not used')
-        },
-      },
-    }
-  }
+  it('本项目有驳回（有内容的理由）与人工补充时 runner 收到 calibration；卡片默认占位理由无信号不注入', async () => {
+    writeFileSync(join(reportsDir, 'r1.md'), '报告内容')
+    seedItem('上线会员日活动')
+    const boardDismissed = seedItem('调整渠道预算')
+    const cardDismissed = seedItem('更换门店物料')
+    applyActionPatch(db, boardDismissed, { status: 'dismissed', dismissedReason: '与大盘趋势不符', via: 'board' })
+    applyActionPatch(db, cardDismissed, { status: 'dismissed', via: 'card' }) // 默认占位理由
 
-  it('有驳回（有内容的理由）与人工补充时 runner 收到 calibration；卡片默认占位理由无信号不注入', async () => {
-    const work = mkdtempSync(join(tmpdir(), 'dp-calib-'))
-    try {
-      const dataDir = join(work, 'raw')
-      mkdirSync(dataDir)
-      writeFileSync(join(dataDir, 'r1.md'), '报告内容')
-      const pipeline = createReportPipeline(dataDir, join(work, 'board.db'))
-
-      seedItem(pipeline.db, '上线会员日活动')
-      const boardDismissed = seedItem(pipeline.db, '调整渠道预算')
-      const cardDismissed = seedItem(pipeline.db, '更换门店物料')
-      applyActionPatch(pipeline.db, boardDismissed, { status: 'dismissed', dismissedReason: '与大盘趋势不符', via: 'board' })
-      applyActionPatch(pipeline.db, cardDismissed, { status: 'dismissed', via: 'card' }) // 默认占位理由
-
-      const { runner, inputs } = await capturingRunner()
-      await pipeline.extract(runner, {})
-      expect(inputs[0].calibration).toEqual({
-        dismissalReasons: ['与大盘趋势不符'],
-        manualAdditions: [{ title: '上线会员日活动', rationale: '上线会员日活动的依据' }],
-      })
-      pipeline.close()
-    } finally {
-      rmSync(work, { recursive: true, force: true })
-    }
+    const runner = runnerOf(() => [])
+    await extractReports(db, projectId, reportsDir, runner)
+    expect(runner.inputs[0].calibration).toEqual({
+      dismissalReasons: ['与大盘趋势不符'],
+      manualAdditions: [{ title: '上线会员日活动', rationale: '上线会员日活动的依据' }],
+    })
+    void CARD_DISMISS_DEFAULT_REASON
   })
 
-  it('无校准数据时 calibration 为 undefined（prompt 形态不变）', async () => {
-    const work = mkdtempSync(join(tmpdir(), 'dp-calib-empty-'))
-    try {
-      const dataDir = join(work, 'raw')
-      mkdirSync(dataDir)
-      writeFileSync(join(dataDir, 'r1.md'), '报告内容')
-      const pipeline = createReportPipeline(dataDir, join(work, 'board.db'))
+  it('本项目无校准数据时 calibration 为 undefined（prompt 形态不变）', async () => {
+    writeFileSync(join(reportsDir, 'r1.md'), '报告内容')
+    const runner = runnerOf(() => [])
+    await extractReports(db, projectId, reportsDir, runner)
+    expect(runner.inputs[0].calibration).toBeUndefined()
+  })
 
-      const { runner, inputs } = await capturingRunner()
-      await pipeline.extract(runner, {})
-      expect(inputs[0].calibration).toBeUndefined()
-      pipeline.close()
-    } finally {
-      rmSync(work, { recursive: true, force: true })
-    }
+  it('校准项目级隔离：B 项目的驳回理由不进 A 项目 prompt', async () => {
+    writeFileSync(join(reportsDir, 'a.md'), 'A')
+    const projectB = createProject(db, { title: '项目B' }).id
+    const dirB = join(dir, 'projects', projectB, 'reports')
+    mkdirSync(dirB, { recursive: true })
+    writeFileSync(join(dirB, 'b.md'), 'B')
+
+    const dismissedB = createActionItem(db, {
+      projectId: projectB,
+      sourceKind: 'manual',
+      reportId: null,
+      title: 'B 项目建议',
+      rationale: 'x',
+      scene: null,
+      lifecycle: null,
+      expectedImpact: '待评估',
+      priority: 'medium',
+      effort: 'medium',
+      confidence: null,
+      evidence: { facts: [], level: '经验假设', reasoning: 'x' },
+    })
+    applyActionPatch(db, dismissedB, { status: 'dismissed', dismissedReason: 'B 项目专属驳回理由', via: 'board' })
+
+    expect(loadCalibrationContext(db, projectId)).toBeUndefined() // A 项目无数据 → 不注入
+    const calibB = loadCalibrationContext(db, projectB)
+    expect(calibB?.dismissalReasons).toEqual(['B 项目专属驳回理由']) // B 项目可见自己的信号
   })
 })
 
 describe('扫描恢复（N4）：进程重启遗留 extracting 复位', () => {
   it('遗留 extracting 报告 → 扫描复位为 failed（可重试）；runner 就绪后重试成功', async () => {
-    const work = mkdtempSync(join(tmpdir(), 'dp-stuck-'))
-    try {
-      const rawDir = join(work, 'raw')
-      mkdirSync(rawDir)
-      writeFileSync(join(rawDir, 'r1.md'), '报告内容')
-      const pipeline = createReportPipeline(rawDir, join(work, 'board.db'))
-      const registered = pipeline.listReports()[0]
-      updateReportStatus(pipeline.db, registered.id, 'extracting') // 模拟进程崩溃遗留（本进程无在抽任务）
-      expect(listReports(pipeline.db)[0].status).toBe('extracting') // 原始读取（不经扫描）确认遗留态
+    writeFileSync(join(reportsDir, 'r1.md'), '报告内容')
+    const registered = scanReports(db, projectId, reportsDir)[0]
+    updateReportStatus(db, registered.id, 'extracting') // 模拟进程崩溃遗留（本进程无在抽任务）
+    expect(listReports(db, projectId)[0].status).toBe('extracting')
 
-      const afterScan = pipeline.listReports() // listReports = scanReports（含复位）
-      expect(afterScan[0]).toMatchObject({ status: 'failed', error: '进程重启中断抽取，可重试' })
+    const afterScan = scanReports(db, projectId, reportsDir) // 扫描含复位
+    expect(afterScan[0]).toMatchObject({ status: 'failed', error: '进程重启中断抽取，可重试' })
 
-      const okRunner: ExtractionRunner = {
-        async runExtraction() {
-          return []
-        },
-        async runExtractionRaw() {
-          throw new Error('not used')
-        },
-      }
-      const results = await pipeline.extract(okRunner, {}) // failed 可重试
-      expect(results[0]).toMatchObject({ slug: 'r1', status: 'done' })
-      pipeline.close()
-    } finally {
-      rmSync(work, { recursive: true, force: true })
+    const okRunner = runnerOf(() => [])
+    const results = await extractReports(db, projectId, reportsDir, okRunner) // failed 可重试
+    expect(results[0]).toMatchObject({ slug: 'r1', status: 'done' })
+  })
+})
+
+describe('抽取完成事件钩子（M6-T2：事件驱动推送缝）', () => {
+  it('done 且有行动项 → 回调 {slug, inserted}；失败不回调', async () => {
+    writeFileSync(join(reportsDir, 'ok.md'), 'A')
+    writeFileSync(join(reportsDir, 'bad.md'), 'B')
+    scanReports(db, projectId, reportsDir)
+    const done: Array<{ slug: string; inserted: number }> = []
+    const runner: ExtractionRunner = {
+      async runExtraction(input) {
+        if (input.taskId.endsWith(':bad')) throw new Error('模型超时')
+        return [DRAFT]
+      },
+      async runExtractionRaw() {
+        throw new Error('not used')
+      },
     }
+    await extractReports(db, projectId, reportsDir, runner, { slug: 'bad' })
+    await extractReports(db, projectId, reportsDir, runner, { slug: 'ok', onReportDone: (info) => done.push(info) })
+    expect(done).toEqual([{ slug: 'ok', inserted: 1 }])
   })
 })
