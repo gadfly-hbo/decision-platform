@@ -31,9 +31,6 @@ function runnerOf(result: () => ActionItemDraft[]): ExtractionRunner & { inputs:
       inputs.push(input)
       return result()
     },
-    async runExtractionRaw() {
-      throw new Error('not used')
-    },
   }
 }
 
@@ -85,9 +82,6 @@ describe('项目报告扫描与抽取管线（SQLite + 假 runner）', () => {
       async runExtraction() {
         if (fail) throw new Error('模型超时')
         return []
-      },
-      async runExtractionRaw() {
-        throw new Error('not used')
       },
     }
     scanReports(db, projectId, reportsDir)
@@ -263,9 +257,6 @@ describe('抽取完成事件钩子（M6-T2：事件驱动推送缝）', () => {
       async runExtraction(input) {
         if (input.taskId.endsWith(':bad')) throw new Error('模型超时')
         return [DRAFT]
-      },
-      async runExtractionRaw() {
-        throw new Error('not used')
       },
     }
     await extractReports(db, projectId, reportsDir, runner, { slug: 'bad' })

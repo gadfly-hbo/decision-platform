@@ -41,9 +41,6 @@ function fakeRunner(): Runner & { setDrafts: (drafts: ActionItemDraft[]) => void
       calls.push(input.taskId)
       return drafts
     },
-    async runExtractionRaw() {
-      throw new Error('not used')
-    },
   }
 }
 

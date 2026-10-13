@@ -71,3 +71,13 @@
 - **G2'' 空态**：无待拍板 → 汇总页空议程 + 引导切「全部」；不阻止进入模式（复盘场景仍可用）。
 - **G3'' 已决项呈现**：按钮区替换留痕行（渠道/时间/驳回理由摘要一行，超长省略号，完整理由在工作台看）。
 - **G4''（第 2 轮）分发一致性**：工作台与汇报模式对同一行动项的操作共享 useBoardStore 同一方法（不复制请求逻辑），模式内本地乐观副本 + 失败停留。
+
+---
+
+# PRD：M8 抽取输出容错（合成自 proposal，增量纯新增）
+
+- `server/agent/normalize.ts` 增纯函数：`extractJsonArrayText`（剥 ```json 围栏 + 字符串感知的中括号配对提取，移植 pi-xanthil 已验证实现）、`repairLooseJson`（字符串感知剥离 // 与 /* */ 注释、尾逗号）、`parseDraftsFromText(text)`（extract → parse → repair 重试 → validateActionDrafts，全失败抛错）。
+- `server/agent/extract.ts`：`runExtractionRaw` 改 `runtime.runText`（同 limits/modelRecovery）；`runExtraction` 成功后 `parseDraftsFromText`；解析失败 → 同 taskId 追加修复指令（「上次输出无法解析为 JSON 数组。只输出严格 JSON 数组，不要任何其他文字、解释或代码围栏」）再跑一次 runText；仍失败抛「抽取失败（输出不是合法 JSON 数组）」。
+- SYSTEM_PROMPT 增：「提取的行动项数量控制在 6 条以内（报告信息不足以支撑 6 条时更少）——只输出优先级最高的行动项」。
+- 测试：normalize 纯函数（围栏/说明文字/字符串内 ]/注释/尾逗号/截断失败）；extract（围栏回复成功[原失败用例翻转]、说明文字包裹成功、截断 JSON→修复重试成功断言重试 prompt、两次皆败抛错）；账本 taskId 复用不炸（同任务两次 run）。
+- G 决议：重试与首轮共用 taskId 与 configuration（账本 CONFIGURATION_CHANGED 不触发）；重试上限 1 次；REPORT_CLIP 16k 不变。

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   deriveActionConfidence,
   parseActionEvidence,
+  parseDraftsFromText,
   sanitizeReportForLlm,
   validateActionDrafts,
 } from './normalize'
@@ -142,5 +143,43 @@ describe('sanitizeReportForLlm', () => {
     expect(out).not.toMatch(/\.png|\.jpg|\.webp/)
     expect(out).toContain('[图片已省略]')
     expect(out).toContain('[图片路径已省略]')
+  })
+})
+
+describe('parseDraftsFromText（M8 宿主解析：围栏/说明/宽松修复）', () => {
+  const DRAFT = { title: '提高复购频次', priority: 'high', evidence: { facts: [{ text: '复购下滑', quote: '复购率由 12% 降至 9%' }], level: '数据支撑', reasoning: 'r' } }
+
+  it('纯 JSON 数组直接解析', () => {
+    expect(parseDraftsFromText(JSON.stringify([DRAFT]))).toHaveLength(1)
+  })
+
+  it('```json 围栏包裹成功（原 INVALID_OUTPUT 场景）', () => {
+    expect(parseDraftsFromText('```json\n' + JSON.stringify([DRAFT]) + '\n```')).toHaveLength(1)
+  })
+
+  it('说明文字前后缀 + 数组段提取成功', () => {
+    expect(parseDraftsFromText('以下是提取的行动项：\n' + JSON.stringify([DRAFT]) + '\n以上共 1 条。')).toHaveLength(1)
+  })
+
+  it('字符串内的 ] 不截断数组段', () => {
+    const tricky = [{ ...DRAFT, rationale: '见[附录二]说明' }]
+    expect(parseDraftsFromText(JSON.stringify(tricky))).toHaveLength(1)
+  })
+
+  it('注释与尾逗号宽松修复', () => {
+    const loose = '[\n  // 行动项\n' + JSON.stringify(DRAFT) + ',\n]'
+    expect(parseDraftsFromText(loose)).toHaveLength(1)
+  })
+
+  it('截断 JSON / 非数组 / 空文本抛错', () => {
+    expect(() => parseDraftsFromText('[{"title":"截断')).toThrow()
+    expect(() => parseDraftsFromText('{"nodes":[]}')).toThrow()
+    expect(() => parseDraftsFromText('')).toThrow()
+    expect(() => parseDraftsFromText('报告没有行动项，无需输出。')).toThrow()
+  })
+
+  it('空数组合法（无行动项语义）', () => {
+    expect(parseDraftsFromText('[]')).toEqual([])
+    expect(parseDraftsFromText('```json\n[]\n```')).toEqual([])
   })
 })

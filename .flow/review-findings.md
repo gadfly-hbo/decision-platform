@@ -71,3 +71,9 @@ Non-blocking 7 项：#1 同名 force 判定过窄（controller 裁定升格正�
 第 1 轮 FAIL：B1 采纳失败仍前进/无播报/本地副本无回滚（/tmp 复现）；B2 拍板后按钮卸载焦点落 body，键盘流与 Esc 全断（/tmp 复现）。变异抽查确认快照/800ms/Esc 焦点归还有真实测试锁定。Non-blocking 8 项留档（aria-current 未实现/播报措辞/键位后缀术语/P 键未屏蔽弹窗/页间 fade 缺/多事实堆叠裁切/useProjects 形状校验范围外记录/采纳钮白字面量）。
 修复轮：store.adopt→Promise<boolean> 同构；doAdopt/doDismiss 失败停留+逐字播报+回滚；成功/失败路径 containerRef.focus()。+2 测试（采纳失败四断言；指针拍板焦点链+Esc）。
 第 2 轮聚焦复审 PASS；残留 2 处同类一行焦点缺口（采纳失败分支、议程直达）controller 直修补齐，B1 测试加固 toHaveFocus。
+
+---
+
+# M8 REVIEW（2026-10-13，聚焦评审）
+
+verdict: PASS。三点修复逐条落实；重试分类结构性安全（fault 全转 reason 文案、不匹配格式正则）；对象开头守卫无误杀；变异推演非恒真；范围 9 文件全在界内。真实回归：原两次失败报告 43.9s 抽出 6 条（账本 2 调用=首轮+修复重试）。verify 初次失败为测试端口池与默认服务端口 8642 重叠的环境冲突（既有隐患，与 M8 无关，留档）。Non-blocking：N1 PRD 文案与实现措辞差、N2 重试吞首轮错误详情（查审计可补）、N3 宽松修复不覆盖尾逗号+注释组合（落重试正确）、N4 FileBudgetStore 端到端由组合覆盖。

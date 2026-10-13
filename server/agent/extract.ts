@@ -1,6 +1,6 @@
-import type { RunResult, Runtime, UncappedLimits } from 'pi-agent-runtime'
+import type { Runtime, UncappedLimits } from 'pi-agent-runtime'
 import type { ActionItemDraft, ExtractionCalibration } from './types'
-import { sanitizeReportForLlm, validateActionDrafts } from './normalize'
+import { parseDraftsFromText, sanitizeReportForLlm } from './normalize'
 
 /** 单次保护参数（PRD 初值）；累计策略显式不封顶，按任务账本持续累计。 */
 export const EXTRACTION_LIMITS: UncappedLimits = {
@@ -14,8 +14,11 @@ export const EXTRACTION_LIMITS: UncappedLimits = {
 /** 报告正文注入上限（字符）；超长截断，防止撑爆上下文与单次输出预算。 */
 const REPORT_CLIP_CHARS = 16_000
 
+/** M8：行动项数量上限——防长报告输出顶到单次输出截断线（优先级最高的少数几条） */
+const MAX_ACTION_ITEMS = 6
+
 const SYSTEM_PROMPT = `你是一个专业的商业行动方案提取引擎。你的任务是从分析报告中提取出具体的、可执行的行动项（Action Items）。
-提取的行动项必须严格遵循 JSON 数组格式返回，不可包含其他任何内容（不要使用 markdown code block，不要解释文字）。
+提取的行动项必须以 JSON 数组格式返回（可以只用一个代码块包裹，也可以裸输出），不可包含其他解释文字。
 [
   {
     "title": "行动项标题",
@@ -32,24 +35,27 @@ const SYSTEM_PROMPT = `你是一个专业的商业行动方案提取引擎。你
     }
   }
 ]
+提取的行动项数量控制在 ${MAX_ACTION_ITEMS} 条以内（报告信息不足以支撑时更少）——只输出优先级最高的行动项，宁缺毋滥。
 evidence 规则：facts 与 reasoning 只能来自报告正文；报告未提供数据支撑时 facts 置空数组、level 取「经验假设」、reasoning 说明报告未给出推导过程。
 如果报告中没有明确的行动项，请返回空数组 []。`
 
+const RETRY_INSTRUCTION = '\n\n（重试要求：上一次输出无法解析为 JSON 数组。这次只输出严格的 JSON 数组本身——不要任何解释文字、不要代码围栏、确保数组完整闭合。）'
+
 export interface ExtractionInput {
-  /** 业务任务 ID（账本权威单位）：报告级稳定，如 extract:<reportSlug> */
+  /** 业务任务 ID（账本权威单位）：报告级稳定，如 extract:<projectId>:<reportSlug> */
   taskId: string
   reportName: string
   reportContent: string
   calibration?: ExtractionCalibration
 }
 
-function buildUserPrompt(input: ExtractionInput): string {
+function buildUserPrompt(input: ExtractionInput, retry: boolean): string {
   const report = sanitizeReportForLlm(input.reportContent).slice(0, REPORT_CLIP_CHARS)
   const calibration = buildCalibrationSection(input.calibration)
   return `报告文件：${input.reportName}
 
 报告内容：
-${report}${calibration}
+${report}${calibration}${retry ? RETRY_INSTRUCTION : ''}
 
 请输出行动项 JSON 数组。`
 }
@@ -74,34 +80,39 @@ ${additions}`)
 
 export interface ExtractionRunner {
   runExtraction(input: ExtractionInput): Promise<ActionItemDraft[]>
-  /** 原始 RunResult（失败语义/用量由调用方处理；测试与管线共用同一缝）。 */
-  runExtractionRaw(input: ExtractionInput): Promise<RunResult<ActionItemDraft[]>>
 }
 
 /**
- * 结构化抽取 = runWorker（AGENT-RUNTIME P2：固定流程、机器消费的结构化变换）。
- * 模型回复由 SDK 严格 JSON.parse 后交给 validateActionDrafts 归一化；
- * 非严格 JSON / 非数组 → run 失败（INVALID_OUTPUT），由报告管线落 failed 状态可重试。
+ * 结构化抽取（M8：runText 文本入口 + 宿主解析）。
+ * 模型回复经 parseDraftsFromText（围栏剥离 → 数组段提取 → 宽松修复 → 归一化）；
+ * 解析失败自动带修复指令重试一次（同 taskId，账本正常累计），再失败上抛由报告管线落 failed。
+ * 结构/枚举/置信度校验仍由 validateActionDrafts 全量执行，容错不放松校验。
  */
 export function createExtractionRunner(options: { runtime: Runtime }): ExtractionRunner {
   const { runtime } = options
-  const runRaw = (input: ExtractionInput) =>
-    runtime.runWorker({
+  const runOnce = async (input: ExtractionInput, retry: boolean): Promise<string> => {
+    const result = await runtime.runText({
       taskId: input.taskId,
       system: SYSTEM_PROMPT,
-      prompt: buildUserPrompt(input),
+      prompt: buildUserPrompt(input, retry),
       limits: EXTRACTION_LIMITS,
       modelRecovery: { extraAttempts: 1 },
-      validate: validateActionDrafts,
     })
+    if (result.status !== 'succeeded') {
+      throw new Error(`抽取失败（${result.status}·${result.reason}）`)
+    }
+    return result.value
+  }
   return {
     async runExtraction(input: ExtractionInput): Promise<ActionItemDraft[]> {
-      const result = await runRaw(input)
-      if (result.status !== 'succeeded') {
-        throw new Error(`抽取失败（${result.status}·${result.reason}）`)
+      try {
+        return parseDraftsFromText(await runOnce(input, false))
+      } catch (error) {
+        if (error instanceof Error && /JSON|数组|解析/.test(error.message)) {
+          return parseDraftsFromText(await runOnce(input, true))
+        }
+        throw error
       }
-      return result.value
     },
-    runExtractionRaw: runRaw,
   }
 }

@@ -86,3 +86,100 @@ export function sanitizeReportForLlm(content: string): string {
     .replace(/<img\b[^>]*>/gi, '[图片已省略]')
     .replace(/\S+\.(?:png|jpe?g|gif|webp|heic|svg)(?:\?\S*)?/gi, '[图片路径已省略]')
 }
+
+/* ---- M8 宿主解析：围栏剥离 / 数组段提取 / 宽松修复（对齐 pi-xanthil 已验证实现）---- */
+
+/** 剥 ```json 围栏后做字符串感知的中括号配对，提取首个完整 JSON 数组段；无数组抛错。 */
+export function extractJsonArrayText(text: string): string {
+  const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(text)
+  const raw = fenced?.[1] ?? text
+  // 对象开头直接拒（防嵌套数组误提取，如 {"nodes":[]} 里的 []）；修复重试会纠正格式
+  const firstNonWs = raw.search(/\S/)
+  if (firstNonWs >= 0 && raw[firstNonWs] === '{') {
+    throw new Error(`模型输出是 JSON 对象而非数组：${text.slice(0, 300)}`)
+  }
+  const start = raw.indexOf('[')
+  if (start < 0) throw new Error(`模型输出不含 JSON 数组：${text.slice(0, 300)}`)
+  let inString = false
+  let escaped = false
+  let depth = 0
+  for (let index = start; index < raw.length; index++) {
+    const char = raw[index]
+    if (escaped) {
+      escaped = false
+      continue
+    }
+    if (char === '\\') {
+      escaped = inString
+      continue
+    }
+    if (char === '"') {
+      inString = !inString
+      continue
+    }
+    if (inString) continue
+    if (char === '[') depth++
+    if (char === ']') {
+      depth--
+      if (depth === 0) return raw.slice(start, index + 1)
+    }
+  }
+  throw new Error(`模型输出的 JSON 数组不完整（可能被输出上限截断）：${raw.slice(start, start + 300)}`)
+}
+
+/** 字符串感知地剥离 JS 注释与尾逗号——不破坏字符串值内本身含斜杠或星号的内容。 */
+export function repairLooseJson(input: string): string {
+  let out = ''
+  let inString = false
+  let escaped = false
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i]
+    const next = input[i + 1]
+    if (inString) {
+      out += ch
+      if (escaped) escaped = false
+      else if (ch === '\\') escaped = true
+      else if (ch === '"') inString = false
+      continue
+    }
+    if (ch === '"') {
+      inString = true
+      out += ch
+      continue
+    }
+    if (ch === '/' && next === '/') {
+      while (i < input.length && input[i] !== '\n') i++
+      continue
+    }
+    if (ch === '/' && next === '*') {
+      i += 2
+      while (i < input.length && !(input[i] === '*' && input[i + 1] === '/')) i++
+      i += 1
+      continue
+    }
+    if (ch === ',') {
+      let j = i + 1
+      while (j < input.length && /\s/.test(input[j] ?? '')) j++
+      const after = input[j]
+      if (after === '}' || after === ']') continue
+    }
+    out += ch
+  }
+  return out
+}
+
+/** 模型原始文本 → 行动项草稿：提取数组段 → 严格解析 → 宽松修复重试 → 归一化。全失败抛错。 */
+export function parseDraftsFromText(text: string): ActionItemDraft[] {
+  const raw = extractJsonArrayText(text)
+  let parsed: unknown
+  for (const candidate of [raw, repairLooseJson(raw)]) {
+    try {
+      parsed = JSON.parse(candidate) as unknown
+      break
+    } catch {
+      // 尝试宽松修复候选
+    }
+  }
+  if (!Array.isArray(parsed)) throw new Error('模型输出无法解析为 JSON 数组')
+  return validateActionDrafts(parsed)
+}
