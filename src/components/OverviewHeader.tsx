@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { BoardView, ReportRecord } from '../data'
-import { REPORT_STATUS_LABELS, formatDateTime } from '../data'
+import { REPORT_STATUS_LABELS, formatDateTime, REPORT_ACCEPT } from '../data'
 import type { UploadOutcome } from '../useBoardStore'
 
 export const REGENERATE_HINT =
@@ -97,7 +97,7 @@ interface ReportZoneProps {
   modelAvailable?: boolean
 }
 
-/** S1b 报告区（v5）：「上传报告」主按钮（隐藏 input，多文件 .md/.txt）+ 项目内报告列表四态 */
+/** S1b 报告区（v5）：「上传报告」主按钮（隐藏 input，多文件多格式）+ 项目内报告列表四态 */
 function ReportZone({ view, onUpload, onExtract, modelAvailable }: ReportZoneProps) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [uploading, setUploading] = useState(false)
@@ -121,7 +121,7 @@ function ReportZone({ view, onUpload, onExtract, modelAvailable }: ReportZonePro
         <input
           ref={inputRef}
           type="file"
-          accept=".md,.txt"
+          accept={REPORT_ACCEPT}
           multiple
           className="upload-input"
           onChange={(event) => void pick(event.target.files)}

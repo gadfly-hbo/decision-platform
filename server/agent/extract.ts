@@ -1,4 +1,4 @@
-import type { Runtime, UncappedLimits } from 'pi-agent-runtime'
+import type { InputImage, Runtime, UncappedLimits } from 'pi-agent-runtime'
 import type { ActionItemDraft, ExtractionCalibration } from './types'
 import { parseDraftsFromText, sanitizeReportForLlm } from './normalize'
 
@@ -45,17 +45,25 @@ export interface ExtractionInput {
   /** 业务任务 ID（账本权威单位）：报告级稳定，如 extract:<projectId>:<reportSlug> */
   taskId: string
   reportName: string
+  /** 文本正文；纯图片报告可为 '' */
   reportContent: string
+  /** 图像输入：图片报告本体，或 pdf/office 内嵌图像（图表/扫描页），与正文一并供视觉模型识别 */
+  images?: readonly InputImage[]
   calibration?: ExtractionCalibration
 }
 
 function buildUserPrompt(input: ExtractionInput, retry: boolean): string {
   const report = sanitizeReportForLlm(input.reportContent).slice(0, REPORT_CLIP_CHARS)
   const calibration = buildCalibrationSection(input.calibration)
+  const imageCount = input.images?.length ?? 0
+  const imageNote =
+    imageCount > 0
+      ? `\n（本报告附带 ${imageCount} 张图片——截图、图表或扫描页，属于报告内容的一部分；请用视觉能力识别其中的文字与数据，与正文一起作为提取依据${report === '' ? '（本报告正文即图片）' : ''}。）`
+      : ''
   return `报告文件：${input.reportName}
 
 报告内容：
-${report}${calibration}${retry ? RETRY_INSTRUCTION : ''}
+${report === '' ? '（见附图）' : report}${imageNote}${calibration}${retry ? RETRY_INSTRUCTION : ''}
 
 请输出行动项 JSON 数组。`
 }
@@ -95,6 +103,7 @@ export function createExtractionRunner(options: { runtime: Runtime }): Extractio
       taskId: input.taskId,
       system: SYSTEM_PROMPT,
       prompt: buildUserPrompt(input, retry),
+      ...(input.images?.length ? { images: input.images } : {}),
       limits: EXTRACTION_LIMITS,
       modelRecovery: { extraAttempts: 1 },
     })

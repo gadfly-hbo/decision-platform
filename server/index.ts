@@ -19,6 +19,13 @@ import { composeDefaultAgent } from './agent/compose'
 import type { ExtractionRunner } from './agent/extract'
 import type { BoardView } from '../src/data/types'
 import {
+  isSupportedReportFile,
+  isTextReportFile,
+  stripReportExtension,
+  MAX_REPORT_BYTES,
+  REPORT_FORMAT_HINT,
+} from '../src/data/report-formats'
+import {
   createProject,
   deleteProject,
   getProject,
@@ -511,7 +518,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 
 // ---- M6：项目报告入口（上传/抽取）----
 
-const MAX_REPORT_BYTES = 2 * 1024 * 1024
 const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/
 
 interface UploadFileOutcome {
@@ -522,11 +528,11 @@ interface UploadFileOutcome {
   error?: string
 }
 
-/** 单文件校验+解码：文件名（.md/.txt、无路径分隔）、base64、≤2MB、UTF-8 可解码（拒绝 U+FFFD 替换） */
-function decodeUploadFile(raw: unknown): { ok: true; filename: string; content: string } | { ok: false; filename: string; error: string } {
+/** 单文件校验+解码：文件名（受支持格式、无路径分隔）、base64、≤20MB；文本类按 UTF-8 校验，二进制原样落盘由抽取端转文本 */
+function decodeUploadFile(raw: unknown): { ok: true; filename: string; content: Buffer } | { ok: false; filename: string; error: string } {
   const filename = typeof (raw as { filename?: unknown })?.filename === 'string' ? (raw as { filename: string }).filename.trim() : ''
   if (filename === '') return { ok: false, filename, error: '文件名必填' }
-  if (!/\.(md|txt)$/i.test(filename)) return { ok: false, filename, error: '仅支持 .md/.txt 报告' }
+  if (!isSupportedReportFile(filename)) return { ok: false, filename, error: `不支持的报告格式（${REPORT_FORMAT_HINT}）` }
   if (/[/\\]/.test(filename) || filename.includes('..')) return { ok: false, filename, error: '文件名不可含路径分隔符' }
   const contentBase64 = (raw as { contentBase64?: unknown }).contentBase64
   if (typeof contentBase64 !== 'string' || contentBase64.trim() === '') return { ok: false, filename, error: '缺少文件内容（contentBase64）' }
@@ -534,10 +540,11 @@ function decodeUploadFile(raw: unknown): { ok: true; filename: string; content: 
   if (normalized.length % 4 !== 0 || !BASE64_RE.test(normalized)) return { ok: false, filename, error: 'contentBase64 不是合法 base64' }
   const buffer = Buffer.from(normalized, 'base64')
   if (buffer.byteLength === 0) return { ok: false, filename, error: '文件内容为空' }
-  if (buffer.byteLength > MAX_REPORT_BYTES) return { ok: false, filename, error: `文件超过 2MB 上限（${buffer.byteLength} 字节）` }
-  const content = buffer.toString('utf-8')
-  if (content.includes('\uFFFD')) return { ok: false, filename, error: '内容无法按 UTF-8 解码（检测到二进制/损坏编码）' }
-  return { ok: true, filename, content }
+  if (buffer.byteLength > MAX_REPORT_BYTES) return { ok: false, filename, error: `文件超过 20MB 上限（${buffer.byteLength} 字节）` }
+  if (isTextReportFile(filename) && buffer.toString('utf-8').includes('\uFFFD')) {
+    return { ok: false, filename, error: '内容无法按 UTF-8 解码（检测到二进制/损坏编码）' }
+  }
+  return { ok: true, filename, content: buffer }
 }
 
 interface ProjectUploadDeps {
@@ -548,8 +555,7 @@ interface ProjectUploadDeps {
 }
 
 function slugOf(filename: string): string {
-  return filename
-    .replace(/\.(md|txt)$/i, '')
+  return stripReportExtension(filename)
     .replace(/[\s/\\]+/g, '-')
     .trim()
 }
@@ -586,7 +592,7 @@ async function handleProjectUpload(
     // 落盘（目录递归建）→ 注册 pending；同名已存在（任何状态）一律 force 重抽（评审修复 1：
     // 覆盖 failed 遗留与 extracting 中断场景，G3 保护已决项 + 清理旧 suggested 不留残骸）
     mkdirSync(deps.reportsDir, { recursive: true })
-    writeFileSync(join(deps.reportsDir, decoded.filename), decoded.content, 'utf-8')
+    writeFileSync(join(deps.reportsDir, decoded.filename), decoded.content) // Buffer 原样落盘（二进制安全）
     const existing = getReportBySlug(db, deps.projectId, slug)
     const force = existing !== undefined
     if (existing) {

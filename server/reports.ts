@@ -1,5 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { isSupportedReportFile, stripReportExtension } from '../src/data/report-formats'
+import { extractReportContent } from './report-text'
 import type { ExtractionRunner } from './agent/extract'
 import type { ExtractionCalibration } from './agent/types'
 import { CARD_DISMISS_DEFAULT_REASON } from './board'
@@ -16,20 +18,20 @@ import {
 } from './db'
 
 /**
- * 报告管线（M6 项目化）：扫描项目 reports 目录（data/projects/<id>/reports/）的 .md/.txt
+ * 报告管线（M6 项目化）：扫描项目 reports 目录（data/projects/<id>/reports/）中受支持格式
+ * （md/txt/csv/pdf/docx/doc/pptx/xlsx/图片，清单见 src/data/report-formats.ts）
  * → 注册（slug=项目内文件名规范化）→ 抽取（幂等：每报告一次，失败可重试；force 按 G3 清理重建
  * suggested，保留已决/有任务项）。共享单一 BoardDb，函数显式携带 (db, projectId, dir)。
  */
 
 export function slugifyReportFilename(filename: string): string {
-  return filename
-    .replace(/\.(md|txt)$/i, '')
+  return stripReportExtension(filename)
     .replace(/[\s/\\]+/g, '-')
     .trim()
 }
 
 function isReportFile(name: string): boolean {
-  return /\.(md|txt)$/i.test(name)
+  return isSupportedReportFile(name)
 }
 
 /** 扫描项目 reports 目录：新文件注册为 pending；已注册 slug 原样保留（身份=项目内文件名）。 */
@@ -140,11 +142,12 @@ async function extractOne(
   inFlight.add(key)
   updateReportStatus(db, report.id, 'extracting')
   try {
-    const content = readFileSync(join(reportsDir, report.filename), 'utf-8')
+    const content = await extractReportContent(report.filename, readFileSync(join(reportsDir, report.filename))) // 多格式装载（文本 + 图像）
     const drafts = await runner.runExtraction({
       taskId: `extract:${projectId}:${report.slug}`,
       reportName: report.filename,
-      reportContent: content,
+      reportContent: content.text,
+      ...(content.images?.length ? { images: content.images } : {}),
       calibration: loadCalibrationContext(db, projectId), // G12：本项目驳回理由 + 人工补充方向注入 prompt
     })
     const removedStale = force ? deleteStaleSuggested(db, report.id) : 0

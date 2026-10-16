@@ -39,7 +39,7 @@ function readAuthProviders(path: string): Record<string, { key?: string }> {
   }
 }
 
-/** 主模型：MiniMax-M3，anthropic-messages 协议（对齐 reports-factory 已验证配置）。 */
+/** 主模型：MiniMax-M3，anthropic-messages 协议（对齐 reports-factory 已验证配置）。原生多模态：图像输入开启（报告内嵌图表/扫描页/图片报告直送识别）。 */
 export const MINIMAX_M3: ModelConfig = {
   provider: 'minimax-cn',
   id: 'MiniMax-M3',
@@ -48,10 +48,10 @@ export const MINIMAX_M3: ModelConfig = {
   contextWindow: 1_048_576,
   maxOutputTokens: 32_768,
   reasoning: true,
-  input: ['text'],
+  input: ['text', 'image'],
 }
 
-/** 备模型：小米 mimo-v2.6-flash，openai-completions 协议。 */
+/** 备模型：小米 mimo-v2.6-flash，openai-completions 协议。全模态输入（官方规格：文本/图像/视频/音频），图像随主模型同链路透传。 */
 export const MIMO_FLASH: ModelConfig = {
   provider: 'xiaomi-token-plan-cn',
   id: 'mimo-v2.6-flash',
@@ -60,7 +60,7 @@ export const MIMO_FLASH: ModelConfig = {
   contextWindow: 128_000,
   maxOutputTokens: 16_384,
   reasoning: true,
-  input: ['text'],
+  input: ['text', 'image'],
 }
 
 /** provider → 环境变量名（密钥只从环境/凭据文件来，不进配置文件与日志）。 */

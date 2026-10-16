@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
 import type { ActionItemView, BoardView, ProjectSummary, ReportRecord } from './data'
+import { isSupportedReportFile, MAX_REPORT_BYTES, REPORT_FORMAT_HINT } from './data'
 import type { ProjectBoardState } from './useProjectBoard'
 import type { ProjectsState } from './useProjects'
 
@@ -73,8 +74,6 @@ export interface BoardStoreDeps {
   board: ProjectBoardState
   projects: ProjectsState
 }
-
-const MAX_UPLOAD_BYTES = 2 * 1024 * 1024
 
 /**
  * 行动闭环 + 项目操作仓库（M6）：乐观更新 + 失败回滚为服务器状态。
@@ -304,12 +303,12 @@ export function useBoardStore(deps: BoardStoreDeps): BoardStore {
       const accepted: Array<{ filename: string; contentBase64: string }> = []
       // 前端预检（G2' 契约文案）：类型/大小；其余校验（UTF-8 等）由后端拒绝并透传原因
       for (const file of files) {
-        if (!/\.(md|txt)$/i.test(file.name)) {
-          outcomes.push({ filename: file.name, ok: false, error: '仅支持 .md/.txt 文件' })
+        if (!isSupportedReportFile(file.name)) {
+          outcomes.push({ filename: file.name, ok: false, error: `不支持的格式（${REPORT_FORMAT_HINT}）` })
           continue
         }
-        if (file.size > MAX_UPLOAD_BYTES) {
-          outcomes.push({ filename: file.name, ok: false, error: '文件超过 2MB' })
+        if (file.size > MAX_REPORT_BYTES) {
+          outcomes.push({ filename: file.name, ok: false, error: '文件超过 20MB' })
           continue
         }
         const buffer = await file.arrayBuffer()

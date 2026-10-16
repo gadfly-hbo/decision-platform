@@ -17,9 +17,13 @@
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.74.0",
+    "@napi-rs/canvas": "^1.0.11",
+    "jszip": "^3.10.2",
+    "pdfjs-dist": "^6.4.299",
     "pi-agent-runtime": "file:vendor/pi-agent-runtime-0.4.1.tgz",
     "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react-dom": "^19.3.0",
+    "word-extractor": "^1.0.4"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^7.0.1",

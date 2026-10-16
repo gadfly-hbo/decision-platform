@@ -130,13 +130,13 @@ describe('上传负向校验（逐份失败不连锁）', () => {
     expect(res.status).toBe(404)
   })
 
-  it('非 md/txt、空文件名、路径分隔符、坏 base64、>2MB、二进制 U+FFFD 逐份拒绝', async () => {
+  it('不支持格式、空文件名、路径分隔符、坏 base64、>20MB、文本类二进制 U+FFFD 逐份拒绝', async () => {
     await listen()
-    const big = 'x'.repeat(2 * 1024 * 1024 + 1)
+    const big = 'x'.repeat(20 * 1024 * 1024 + 1)
     const binary = Buffer.from([0xff, 0xfe, 0x00, 0x01, 0x82]).toString('base64')
     const res = await upload({
       files: [
-        { filename: '周报.pdf', contentBase64: b64('PDF') },
+        { filename: '周报.exe', contentBase64: b64('MZ') },
         { filename: '', contentBase64: b64('x') },
         { filename: '../evil.md', contentBase64: b64('穿越') },
         { filename: 'bad.md', contentBase64: '!!!not-base64!!!' },
@@ -152,8 +152,8 @@ describe('上传负向校验（逐份失败不连锁）', () => {
       expect(result.status).toBe('failed')
       expect(result.error).toBeTruthy()
     }
-    expect(body.results.find((r) => r.filename === '周报.pdf')?.error).toContain('.md/.txt')
-    expect(body.results.find((r) => r.filename === 'big.md')?.error).toContain('2MB')
+    expect(body.results.find((r) => r.filename === '周报.exe')?.error).toContain('不支持的报告格式')
+    expect(body.results.find((r) => r.filename === 'big.md')?.error).toContain('20MB')
     expect(body.results.find((r) => r.filename === 'binary.md')?.error).toContain('UTF-8')
     expect(existsSync(reportsDirOf())).toBe(false) // 全拒时不落盘不注册
   })
@@ -175,26 +175,27 @@ describe('上传与异步抽取', () => {
       files: [
         { filename: '周报A.md', contentBase64: b64('# 周报A\n会员复购率由 12% 降至 9%。') },
         { filename: '周报B.txt', contentBase64: b64('周报B 正文') },
-        { filename: '周报C.csv', contentBase64: b64('a,b') },
+        { filename: '周报C.csv', contentBase64: b64('指标,数值\n复购率,9%') },
+        { filename: '附件.exe', contentBase64: b64('MZ') },
       ],
     })
     expect(res.status).toBe(200)
     const body = (await res.json()) as { results: UploadResult[] }
-    expect(body.results).toHaveLength(3)
+    expect(body.results).toHaveLength(4)
     const okResults = body.results.filter((r) => r.ok)
-    expect(okResults.map((r) => r.filename).sort()).toEqual(['周报A.md', '周报B.txt'])
-    expect(body.results.find((r) => r.filename === '周报C.csv')?.ok).toBe(false) // 单败不连锁
+    expect(okResults.map((r) => r.filename).sort()).toEqual(['周报A.md', '周报B.txt', '周报C.csv'])
+    expect(body.results.find((r) => r.filename === '附件.exe')?.ok).toBe(false) // 单败不连锁
 
     // 落盘 + 注册 + 异步抽取完成
     expect(readFileSync(join(reportsDirOf(), '周报A.md'), 'utf-8')).toContain('周报A')
-    const board = (await waitBoard((b) => (b.reports as Array<{ status: string }>).filter((r) => r.status === 'done').length === 2)) as {
+    const board = (await waitBoard((b) => (b.reports as Array<{ status: string }>).filter((r) => r.status === 'done').length === 3)) as {
       reports: Array<{ slug: string; status: string }>
       actionItems: Array<{ title: string; projectId: string }>
     }
-    expect(board.reports.map((r) => r.slug).sort()).toEqual(['周报A', '周报B'])
-    expect(board.actionItems).toHaveLength(2) // 每报告 1 条高优建议
+    expect(board.reports.map((r) => r.slug).sort()).toEqual(['周报A', '周报B', '周报C'])
+    expect(board.actionItems).toHaveLength(3) // 每报告 1 条高优建议
     expect(board.actionItems.every((item) => item.projectId === projectId)).toBe(true)
-    expect(runner.calls).toHaveLength(2)
+    expect(runner.calls).toHaveLength(3)
   })
 
   it('无 runner → 上传成功但报告 failed「模型不可用」（与 M5 语义一致）', async () => {

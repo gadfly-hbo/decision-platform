@@ -1,4 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
+import JSZip from 'jszip'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -48,16 +49,18 @@ afterEach(() => {
 })
 
 describe('项目报告扫描与抽取管线（SQLite + 假 runner）', () => {
-  it('新 md/txt 报告注册为 pending；已注册 slug 不重复；旧 CSV 不识别', () => {
+  it('受支持格式（md/csv 等）注册为 pending；已注册 slug 不重复；不支持格式跳过', () => {
     writeFileSync(join(reportsDir, '周报.md'), '# 报告一')
     writeFileSync(join(reportsDir, '会员周报4213.csv'), 'a,b\n1,2')
+    writeFileSync(join(reportsDir, '笔记.exe'), 'MZ')
     const reports1 = scanReports(db, projectId, reportsDir)
-    expect(reports1).toHaveLength(1)
-    expect(reports1[0]).toMatchObject({ projectId, slug: '周报', filename: '周报.md', status: 'pending' })
+    expect(reports1).toHaveLength(2)
+    expect(reports1.map((r) => r.slug).sort()).toEqual(['会员周报4213', '周报'])
+    expect(reports1.find((r) => r.slug === '周报')).toMatchObject({ projectId, filename: '周报.md', status: 'pending' })
 
     const reports2 = scanReports(db, projectId, reportsDir)
-    expect(reports2).toHaveLength(1)
-    expect(reports2[0].id).toBe(reports1[0].id)
+    expect(reports2).toHaveLength(2)
+    expect(reports2.map((r) => r.id).sort()).toEqual(reports1.map((r) => r.id).sort())
   })
 
   it('extract 处理 pending 报告：done + 行动项入库；再次 extract 不重复处理', async () => {
@@ -73,6 +76,33 @@ describe('项目报告扫描与抽取管线（SQLite + 假 runner）', () => {
     const results2 = await extractReports(db, projectId, reportsDir, runner)
     expect(results2).toHaveLength(0) // 无待处理报告
     expect(runner.inputs).toHaveLength(1)
+  })
+
+  it('docx 报告：抽取前由 report-text 转为纯文本送入 runner', async () => {
+    const zip = new JSZip()
+    zip.file('word/document.xml', '<w:document><w:body><w:p><w:r><w:t>会员复购率由 12% 降至 9%</w:t></w:r></w:p></w:body></w:document>')
+    writeFileSync(join(reportsDir, '会员周报.docx'), await zip.generateAsync({ type: 'nodebuffer' }))
+    const runner = runnerOf(() => [DRAFT])
+    scanReports(db, projectId, reportsDir)
+
+    const results = await extractReports(db, projectId, reportsDir, runner)
+    expect(results).toHaveLength(1)
+    expect(results[0]).toMatchObject({ slug: '会员周报', status: 'done', inserted: 1 })
+    expect(runner.inputs[0].reportContent).toContain('会员复购率由 12% 降至 9%')
+  })
+
+  it('图片报告：正文为空，图像作为 InputImage 送入 runner', async () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3])
+    writeFileSync(join(reportsDir, '门店照片.png'), png)
+    const runner = runnerOf(() => [DRAFT])
+    scanReports(db, projectId, reportsDir)
+
+    const results = await extractReports(db, projectId, reportsDir, runner)
+    expect(results[0]).toMatchObject({ slug: '门店照片', status: 'done', inserted: 1 })
+    expect(runner.inputs[0].reportContent).toBe('')
+    expect(runner.inputs[0].images).toHaveLength(1)
+    expect(runner.inputs[0].images![0].mimeType).toBe('image/png')
+    expect(Buffer.from(runner.inputs[0].images![0].data, 'base64')).toEqual(png)
   })
 
   it('runner 抛错 → failed + error 信息；可重试成功', async () => {

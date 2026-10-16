@@ -1,6 +1,7 @@
 import { render, screen, within, fireEvent, waitFor } from '@testing-library/react'
 import { vi } from 'vitest'
 import App from './App'
+import { REPORT_FORMAT_HINT } from './data'
 import type { ActionItemView, BoardView, ProjectSummary, ReportRecord } from './data'
 
 /* ---- 测试夹具（注入 data 缝，不拉取后端）---- */
@@ -888,8 +889,8 @@ test('上传报告：多文件前端预检（类型/大小逐字失败文案）+
   const { container } = render(<App projects={[summaryP1]} data={baseView} />)
   const input = container.querySelector('input.upload-input') as HTMLInputElement
   const goodFile = new File(['# 报告内容'], '新报告.md', { type: 'text/markdown' })
-  const badType = new File(['a,b'], '数据.csv', { type: 'text/csv' })
-  const tooBig = new File(['x'.repeat(2 * 1024 * 1024 + 1)], '超大.md')
+  const badType = new File(['MZ'], '程序.exe', { type: 'application/octet-stream' })
+  const tooBig = new File(['x'.repeat(20 * 1024 * 1024 + 1)], '超大.pdf')
   Object.defineProperty(input, 'files', { value: [goodFile, badType, tooBig] })
   fireEvent.change(input)
 
@@ -899,8 +900,8 @@ test('上传报告：多文件前端预检（类型/大小逐字失败文案）+
   })
   const post = calls.find((c) => c.method === 'POST' && c.url.includes('/api/projects/p1/reports'))!
   expect((post.body as { files: Array<{ filename: string }> }).files.map((f) => f.filename)).toEqual(['新报告.md']) // 预检失败不发送
-  expect(await screen.findByText('上传失败：仅支持 .md/.txt 文件')).toBeInTheDocument() // 契约逐字
-  expect(screen.getByText('上传失败：文件超过 2MB')).toBeInTheDocument()
+  expect(await screen.findByText(`上传失败：不支持的格式（${REPORT_FORMAT_HINT}）`)).toBeInTheDocument() // 契约逐字
+  expect(screen.getByText('上传失败：文件超过 20MB')).toBeInTheDocument()
   await waitFor(() => expect(screen.getByText('抽取中')).toBeInTheDocument()) // 上传成功 → board 刷新见抽取中
   vi.unstubAllGlobals()
 })
