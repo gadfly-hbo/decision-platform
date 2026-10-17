@@ -59,6 +59,17 @@ import {
 /** 默认端口避开兄弟项目：5173/4173/8787/8080/5021/2122/1234 均已占用 */
 export const DEFAULT_PORT = 8642
 
+/**
+ * 运行数据根解析（M10 宿主装配接缝）：`DATA_ROOT` 显式指定（相对路径按 cwd 解析为绝对；空白视为未设置）；
+ * 缺省 `<cwd>/data`（独立运行零变化）。供 JuanerAI 随包/launchd/容器在受控装配处显式定位运行数据，
+ * 不依赖 cwd 控制。仅直接执行入口使用；库形态（startServer options）不读 env——显式注入优先的既有设计不变。
+ */
+export function resolveDataRoot(env: NodeJS.ProcessEnv = process.env, cwd: string = process.cwd()): string {
+  const raw = env['DATA_ROOT']
+  if (raw === undefined || raw.trim() === '') return join(cwd, 'data')
+  return resolve(cwd, raw)
+}
+
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' })
   res.end(JSON.stringify(body))
@@ -466,13 +477,16 @@ async function readBody(req: import('node:http').IncomingMessage): Promise<strin
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const port = Number(process.env.PORT ?? DEFAULT_PORT)
   const host = process.env.HOST ?? '127.0.0.1'
+  // M10：运行数据根统一从 dataRoot 派生（board.db / projects / im.json / notify*.json / agent-* 与账本），
+  // DATA_ROOT 显式指定时宿主装配不依赖 cwd；缺省 <cwd>/data 与独立运行现状逐字节等价（红队 R1：杜绝分裂两处）。
+  const dataRoot = resolveDataRoot()
   // 生产：共享单库（服务器与飞书桥接同连接）；M5 旧库自动清空重建
-  const db = openBoardDb(join(process.cwd(), 'data', 'board.db'))
-  const projectsDir = join(process.cwd(), 'data', 'projects')
-  // 配置了飞书（data/im.json）→ 长连接桥接（零公网入站）；无配置跳过，推送回落群机器人
+  const db = openBoardDb(join(dataRoot, 'board.db'))
+  const projectsDir = join(dataRoot, 'projects')
+  // 配置了飞书（<dataRoot>/im.json）→ 长连接桥接（零公网入站）；无配置跳过，推送回落群机器人
   let imChannel: ImPushChannel | undefined
   let stopBridge: (() => Promise<void>) | undefined
-  const imConf = readImConfig(join(process.cwd(), 'data', 'im.json'))
+  const imConf = readImConfig(join(dataRoot, 'im.json'))
   const feishuConf = imConf?.platforms.find((p) => p.platform === 'feishu')
   if (feishuConf) {
     try {
@@ -487,9 +501,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // M5：生产装配抽取 runner（密钥缺失降级，不阻塞看板其他能力）；账本实例供 S-R 运行详情投影
   let agentRunner: ReturnType<typeof composeDefaultAgent>['runner'] | undefined
   let agentLedger: AgentLedgerProjection | undefined
-  let agentAuditPath: string | undefined
   try {
-    const composed = composeDefaultAgent(join(process.cwd(), 'data'))
+    const composed = composeDefaultAgent(dataRoot)
     agentRunner = composed.runner
     agentLedger = {
       usageTotals: () => toUsageTotals(composed.store.usageTotals()),
@@ -499,7 +512,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       },
       ledgerPath: composed.ledgerPath,
     }
-    agentAuditPath = composed.auditPath
     console.log('[agent] 抽取 runner 就绪（模型链已装配）')
   } catch (error) {
     console.warn('[agent] 模型链不可用，抽取能力将不可用：', (error as Error).message)
@@ -507,10 +519,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const server = startServer(port, host, {
     db,
     projectsDir,
+    notifyFile: join(dataRoot, 'notify.json'),
+    notifyStateFile: join(dataRoot, 'notify-state.json'),
+    agentAuditPath: join(dataRoot, 'agent-audit.jsonl'),
     ...(imChannel ? { imChannel } : {}),
     ...(agentRunner ? { agentRunner } : {}),
     ...(agentLedger ? { agentLedger } : {}),
-    ...(agentAuditPath ? { agentAuditPath } : {}),
   })
   if (stopBridge) server.on('close', () => void stopBridge!())
   console.log(`[decision-platform] backend listening on http://${host}:${port}`)

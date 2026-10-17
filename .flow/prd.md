@@ -81,3 +81,48 @@
 - SYSTEM_PROMPT 增：「提取的行动项数量控制在 6 条以内（报告信息不足以支撑 6 条时更少）——只输出优先级最高的行动项」。
 - 测试：normalize 纯函数（围栏/说明文字/字符串内 ]/注释/尾逗号/截断失败）；extract（围栏回复成功[原失败用例翻转]、说明文字包裹成功、截断 JSON→修复重试成功断言重试 prompt、两次皆败抛错）；账本 taskId 复用不炸（同任务两次 run）。
 - G 决议：重试与首轮共用 taskId 与 configuration（账本 CONFIGURATION_CHANGED 不触发）；重试上限 1 次；REPORT_CLIP 16k 不变。
+
+---
+
+# PRD：M10 JuanerAI 接入准备·插件侧（合成自 proposal + 红队吸收项）
+
+## Problem Statement
+
+宿主（JuanerAI）随包装配需要显式数据根，现状为 `<cwd>/data` 隐式耦合：直接进程形态下宿主必须控制工作目录才能定位数据；集成身份（源提交／固定物料指纹）未落档，未来宿主按规范 §6 建立升级基线时无处可查；README 路线节与 git 历史漂移（停在 M6，实际已交付至 M9）。
+
+## Solution
+
+三项插件侧准备：`DATA_ROOT` 环境变量显式数据根（boot 块统一派生六类运行数据路径）；`docs/juanerai-integration-baseline.md` 集成基线记录（规范身份 + 物料指纹 + 宿主三项推荐默认 + 未采用声明）；README 路线节补 M7–M10 与 `DATA_ROOT` 文档。
+
+## Implementation Decisions
+
+**DATA_ROOT（接缝设计）**
+- `server/index.ts` 新增导出纯函数 `resolveDataRoot(env = process.env, cwd = process.cwd()): string`：`DATA_ROOT` 未设或空白 → `join(cwd, 'data')`；否则 `resolve(cwd, raw)`（相对路径按 cwd 钉死、绝对原样）。
+- 直接执行入口（main-module 守卫内）改为：`const dataRoot = resolveDataRoot()`，全部运行数据路径从 `dataRoot` 派生并**显式传入** `startServer`：`db`（`join(dataRoot,'board.db')`）、`projectsDir`、`notifyFile`、`notifyStateFile`、`agentAuditPath`（恒传，替代原 composed 成功才传的条件展开——两者路径恒等）、`im.json` 读取与 `composeDefaultAgent(dataRoot)` 同根。
+- 库函数 `startServer` 及 `ServerOptions` **零改动**：显式 options 优先的既有设计不变，`DATA_ROOT` 不进库函数（测试/宿主库形态仍走注入）。
+- 独立运行零变化：不设 env 时所有路径与现状逐字节等价。
+- `dist/` 静态资源目录不受 `DATA_ROOT` 影响（代码资源 ≠ 用户数据）。
+
+**集成基线记录 `docs/juanerai-integration-baseline.md`**
+- 规范身份：PR #93、提交 `6756546a1423162b16a552b24b83bdaa1e834e50`、散件包 tar.gz SHA256 `7407719118b481f5786a6bd2dfda2611c67625cbdda9da414d2563c7ceaba50a`（19,778 bytes）；注明「摘要一致证明内容一致，不等于签名/认证/实现符合」。
+- 插件物料指纹：业务源提交（M10 发布提交，采用时以实际采用提交为准）、vendored `pi-agent-runtime-0.4.1.tgz` SHA256 `1ddace3a5b7ff97e80627dc4660d9f300ac402a4bfc67f43144380d3352d6da5`（102,550 bytes）、`package-lock.json` SHA256（落档当时值，采用时重算）。
+- 宿主三项合同决策（推荐默认，**待宿主任务正式确认**）：承载形态＝子进程+HTTP（`/api/health` 就绪探针）；UI＝反代同源整屏（前端零基址硬编码）；密钥＝宿主 env 注入（`server/agent/model.ts:17-31` env 优先不被覆盖）。
+- 显式声明：宿主侧 Adapter/装配**未发生**；本文是记录不是采用证明；首次采用时按 standard §6 建立最小差异表，升级保护「不能证明保留已验行为 → 阻止该次新升级并保留旧包」。
+
+**README**
+- 「开发」节补环境变量说明：`DATA_ROOT`（默认 `<cwd>/data`；含 board.db / projects / im.json / notify*.json / agent-*）。
+- 「路线」节：M6 去掉「当前」标记；补 M7（会议汇报模式）、M8（抽取输出容错）、M9（多格式报告摄入）、M10（当前：JuanerAI 接入准备·插件侧）。
+
+## Testing Decisions
+
+- 新文件 `server/data-root.test.ts` 四用例：缺省 `<cwd>/data`；绝对路径原样；相对路径按 cwd 解析为绝对；空白字符串视为未设置。
+- boot 块接线（main-module 守卫内）不做单测——与既有先例一致（启动装配从未直接单测），由 REVIEW 走查六类路径派生完整性（红队 R1）。
+- 回归：全量 `npm run verify`（tsc + vitest + build）。
+
+## Out of Scope
+
+API 鉴权 hook、取消端点、plist 参数化、宿主侧任何装配/Adapter、SDK 升级或版本统一、`.flow/state.json` 入库（维持 gitignore）。
+
+## GRILL 决议（2026-10-17，免轮）
+
+范围三项与发布方式经用户显式确认（问答落档）；宿主三项合同决策按「推荐默认待确认」处理，无未决 load-bearing 假设，免 GRILL 轮。

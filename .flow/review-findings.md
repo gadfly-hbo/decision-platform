@@ -77,3 +77,18 @@ Non-blocking 7 项：#1 同名 force 判定过窄（controller 裁定升格正�
 # M8 REVIEW（2026-10-13，聚焦评审）
 
 verdict: PASS。三点修复逐条落实；重试分类结构性安全（fault 全转 reason 文案、不匹配格式正则）；对象开头守卫无误杀；变异推演非恒真；范围 9 文件全在界内。真实回归：原两次失败报告 43.9s 抽出 6 条（账本 2 调用=首轮+修复重试）。verify 初次失败为测试端口池与默认服务端口 8642 重叠的环境冲突（既有隐患，与 M8 无关，留档）。Non-blocking：N1 PRD 文案与实现措辞差、N2 重试吞首轮错误详情（查审计可补）、N3 宽松修复不覆盖尾逗号+注释组合（落重试正确）、N4 FileBudgetStore 端到端由组合覆盖。
+
+---
+
+# M10 REVIEW（2026-10-17，独立评审者·全新上下文，单轮）
+
+verdict: **PASS**（9 项核查全过，零 blocking）。verify 复跑三绿（18 文件/195 测试，含 data-root 新 4 例）。
+
+- 红队 R1 钉死：boot 块七类数据路径（六路径 + composeDefaultAgent 账本）全部且仅从同一 dataRoot 派生，守卫块内 process.cwd() 出现 0 次；distDir 走库缺省属代码资源（PRD 明示）。
+- 缺省等价：对照 3f7817fe 逐字节等价；agentAuditPath 恒传在缺省下恒等、DATA_ROOT 下消除 compose 失败时「审计读 cwd / 账本写 dataRoot」的潜在双根（比旧形态更正确）。
+- 库纯净：startServer/ServerOptions 零改动、无 env 读取；diff 仅两 hunk（resolveDataRoot 新增 + boot 块）。
+- 测试非恒真：四分支变异推演各有杀伤用例。
+- 基线文档：三处「未采用」声明齐备、推荐默认标注待确认、vendor/lockfile 指纹 shasum 实测复核逐字一致。
+- README 路线 M7–M10 与 git log 提交主题一一对应；范围纪律恰八文件、state.json 命中 gitignore 未入库；boot 块桥接/停止/降级逻辑逐字未动。
+
+Non-blocking 留档：N1 基线文档外部身份（PR#93/6756546a/包 SHA）源自对话交付评估、本仓无法独立复核（文档 §4 已自注口径诚实）；N2 resolveDataRoot 缺省参数接线无单测（既有先例 + PRD 明示，本 REVIEW 走查吸收）；N3 tasks.md 验收框发布时补勾（已处理）；N4 `~` 前缀 DATA_ROOT 不展开（resolve 标准行为，文档未承诺）。

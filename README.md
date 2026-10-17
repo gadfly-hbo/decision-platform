@@ -70,6 +70,7 @@ launchctl load ~/Library/LaunchAgents/com.decision-platform.prod.plist
 ```
 
 - 生产端口 **9642**（`HOST=0.0.0.0` 局域网可访问，仅限可信内网，禁止暴露公网）；开发端口 前端 5180 / 后端 8642。
+- 环境变量：`PORT`/`HOST` 监听地址；`DATA_ROOT` 显式运行数据根（默认 `<项目根>/data`，覆盖 board.db、projects/、im.json、notify*.json、agent-* 全部运行数据；供宿主随包装配/容器部署定位数据，不设则与独立运行现状一致，见 `server/index.ts` `resolveDataRoot`）。
 - 日志 `data/prod.log`；重启自动恢复（RunAtLoad + KeepAlive）。推送为抽取完成事件驱动，无常驻定时器，停机窗口不影响。
 - **不入库**（双机各自独立）：`data/board.db`、`data/projects/`、`data/agent-ledger.json*`、`data/agent-audit.jsonl`、`data/notify.json`、`data/notify-state.json`、`data/im.json`、`data/prod.log`。
 - 双机约定：Mac mini = 生产单实例（唯一事实源）；MacBook = 纯开发机，要看真实数据访问 Mac mini 实例。
@@ -81,5 +82,9 @@ launchctl load ~/Library/LaunchAgents/com.decision-platform.prod.plist
 - **M3（已交付）**：webhook 推送（幂等）、行动持久化、跨周对照。
 - **M4（已交付）**：飞书卡片直审 + 内网单实例常驻。
 - **M5（已交付）**：报告驱动行动闭环——LLM 抽取（证据/置信度/校准注入）、SQLite 存储、三栏工作台前端、按报告推送。全局目录投放形态。
-- **M6（当前，已交付）**：项目化——项目为根容器（CRUD/硬删级联/统计导航）、项目内上传（base64/2MB/同名覆盖=重新生成）、上传即抽、事件驱动推送（调度器退役）、G12 校准项目级隔离、前端项目导航/无项目引导/演示态退役、旧库清空重建。
+- **M6（已交付）**：项目化——项目为根容器（CRUD/硬删级联/统计导航）、项目内上传（base64/2MB/同名覆盖=重新生成）、上传即抽、事件驱动推送（调度器退役）、G12 校准项目级隔离、前端项目导航/无项目引导/演示态退役、旧库清空重建。
+- **M7（已交付）**：会议汇报模式——全屏汇报流（汇总页大字统计+证据分布+议程直达、逐项页 3 米可读、键盘 `←/→` 逐条推进），会中拍板留痕与看板/飞书卡片同库同先到先得语义。
+- **M8（已交付）**：抽取输出容错——`runText` 文本入口 + 宿主解析管线（围栏剥离/宽松修复/归一化校验不放松）+ 行动项 ≤6 条上限 + 解析失败自动修复重试一次（同 taskId 账本正常累计）。
+- **M9（已交付）**：多格式报告摄入——PDF/Office/图片解析为文本+图像（pdfjs 逐页文本层+整页渲染、OOXML 解包、图片直送），PDF 页面与文档内嵌图像直送视觉模型（MiniMax-M3 原生多模态）。
+- **M10（当前，已交付）**：JuanerAI 接入准备（插件侧）——`DATA_ROOT` 显式数据根（宿主装配不依赖 cwd 控制，缺省行为不变）、集成基线记录（`docs/juanerai-integration-baseline.md`：规范身份/物料指纹/宿主合同推荐默认）、路线文档同步；宿主侧 Adapter 未发生。
 - **候选**：JuanerAI 对接（后续立项，不设占位）、钉钉适配（schema 预留）、桥接失败自动重建、多审批人（或签/会签）、公网升级 + IM 内 H5。
